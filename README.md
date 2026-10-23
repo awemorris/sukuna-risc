@@ -1,7 +1,9 @@
 Sukuna-RISC
 ===========
 
-`Sukuna RISC` is a RTL CPU implementation.
+`Sukuna RISC` is an RTL CPU implementation.
+
+The name `Sukuna` comes from `Sukunahikona`, literally meaning "Small Genius," with a double meaning of "reduced."
 
 Overall Architecture:
 - In-order, 2-issue, 2-SMT, 2-core / 4-thread
