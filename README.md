@@ -19,3 +19,5 @@ Overall Architecture:
     - MEM2 (and forwarded EX)
     - WB
 - Around 22000-LUT plus BRAM
+
+Synthesis goal is 200MHz on KC705 board and 1.5GHz for ASIC processes.
