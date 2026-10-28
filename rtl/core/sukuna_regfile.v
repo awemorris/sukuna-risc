@@ -1,7 +1,7 @@
 // ============================================================================
 // Multi-Port Integer Register File (GPR) (Verilog 2005)
 // Complies with design-rule.md:
-//   - Array registers strictly instantiated using sukuna_ram_ff
+//   - Array registers strictly instantiated using sk_ram_ff
 //   - Dual-bank replication for 4 concurrent asynchronous read ports
 // ============================================================================
 
@@ -49,7 +49,7 @@ module sukuna_regfile #(
                                  wen_p1_i ? wdata_p1_i : wdata_p2_i;
 
   // Bank 0: Serves Slot 0 reads (rs1, rs2)
-  sukuna_ram_ff #(
+  sk_ram_ff #(
     .DATA_WIDTH(XLEN),
     .ADDR_WIDTH(5),
     .DEPTH     (32),
@@ -67,7 +67,7 @@ module sukuna_regfile #(
   );
 
   // Bank 1: Serves Slot 1 reads (rs1, rs2)
-  sukuna_ram_ff #(
+  sk_ram_ff #(
     .DATA_WIDTH(XLEN),
     .ADDR_WIDTH(5),
     .DEPTH     (32),

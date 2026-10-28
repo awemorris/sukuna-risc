@@ -14,19 +14,19 @@ module sukuna_mmu #(
   input  wire                               clk_i,
   input  wire                               rst_ni,
 
-  // L1-ITLB Lookup interfaces for 3 Harts
-  input  wire [NUM_HARTS-1:0]               itlb_lookup_valid_i,
-  input  wire [NUM_HARTS*VADDR_WIDTH-1:0]   itlb_vaddr_i,
-  output wire [NUM_HARTS-1:0]               itlb_hit_o,
-  output wire [NUM_HARTS*PADDR_WIDTH-1:0]   itlb_paddr_o,
-  output wire [NUM_HARTS-1:0]               itlb_page_fault_o,
+  // L1-ITLB Lookup interfaces for 3 Harts (word-aligned: bits [1:0] omitted)
+  input  wire [NUM_HARTS-1:0]                   itlb_lookup_valid_i,
+  input  wire [NUM_HARTS*(VADDR_WIDTH-2)-1:0]   itlb_vaddr_w_i,
+  output wire [NUM_HARTS-1:0]                   itlb_hit_o,
+  output wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0]   itlb_paddr_w_o,
+  output wire [NUM_HARTS-1:0]                   itlb_page_fault_o,
 
-  // L1-DTLB Lookup interfaces for 3 Harts
-  input  wire [NUM_HARTS-1:0]               dtlb_lookup_valid_i,
-  input  wire [NUM_HARTS*VADDR_WIDTH-1:0]   dtlb_vaddr_i,
-  output wire [NUM_HARTS-1:0]               dtlb_hit_o,
-  output wire [NUM_HARTS*PADDR_WIDTH-1:0]   dtlb_paddr_o,
-  output wire [NUM_HARTS-1:0]               dtlb_page_fault_o,
+  // L1-DTLB Lookup interfaces for 3 Harts (word-aligned: bits [1:0] omitted)
+  input  wire [NUM_HARTS-1:0]                   dtlb_lookup_valid_i,
+  input  wire [NUM_HARTS*(VADDR_WIDTH-2)-1:0]   dtlb_vaddr_w_i,
+  output wire [NUM_HARTS-1:0]                   dtlb_hit_o,
+  output wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0]   dtlb_paddr_w_o,
+  output wire [NUM_HARTS-1:0]                   dtlb_page_fault_o,
 
   // CSR satp registers for address translation
   input  wire [XLEN-1:0]                    satp_hart0_i,
@@ -36,9 +36,9 @@ module sukuna_mmu #(
   // SFENCE.VMA flush per Hart
   input  wire [NUM_HARTS-1:0]               sfence_flush_i,
 
-  // Memory interface to L2 Arbiter for Page Table Walker PTE reads
+  // Memory interface to L2 Arbiter for Page Table Walker PTE reads (word-aligned)
   output wire                               ptw_mem_req_valid_o,
-  output wire [PADDR_WIDTH-1:0]             ptw_mem_req_paddr_o,
+  output wire [PADDR_WIDTH-1:2]             ptw_mem_req_paddr_w_o,
   input  wire                               ptw_mem_req_ready_i,
   input  wire                               ptw_mem_resp_valid_i,
   input  wire [XLEN-1:0]                    ptw_mem_resp_data_i
@@ -56,14 +56,14 @@ module sukuna_mmu #(
         .clk_i              (clk_i),
         .rst_ni             (rst_ni),
         .lookup_valid_i     (itlb_lookup_valid_i[h]),
-        .vaddr_i            (itlb_vaddr_i[h*VADDR_WIDTH +: VADDR_WIDTH]),
+        .vaddr_w_i          (itlb_vaddr_w_i[h*(VADDR_WIDTH-2) +: (VADDR_WIDTH-2)]),
         .hit_o              (itlb_hit_o[h]),
-        .paddr_o            (itlb_paddr_o[h*PADDR_WIDTH +: PADDR_WIDTH]),
+        .paddr_w_o          (itlb_paddr_w_o[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .page_fault_o       (itlb_page_fault_o[h]),
         .refill_req_o       (),
-        .refill_vaddr_o     (),
+        .refill_vaddr_w_o   (),
         .refill_resp_valid_i(1'b0),
-        .refill_paddr_i     ({PADDR_WIDTH{1'b0}}),
+        .refill_paddr_w_i   ({(PADDR_WIDTH-2){1'b0}}),
         .refill_fault_i     (1'b0),
         .flush_i            (sfence_flush_i[h])
       );
@@ -76,14 +76,14 @@ module sukuna_mmu #(
         .clk_i              (clk_i),
         .rst_ni             (rst_ni),
         .lookup_valid_i     (dtlb_lookup_valid_i[h]),
-        .vaddr_i            (dtlb_vaddr_i[h*VADDR_WIDTH +: VADDR_WIDTH]),
+        .vaddr_w_i          (dtlb_vaddr_w_i[h*(VADDR_WIDTH-2) +: (VADDR_WIDTH-2)]),
         .hit_o              (dtlb_hit_o[h]),
-        .paddr_o            (dtlb_paddr_o[h*PADDR_WIDTH +: PADDR_WIDTH]),
+        .paddr_w_o          (dtlb_paddr_w_o[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .page_fault_o       (dtlb_page_fault_o[h]),
         .refill_req_o       (),
-        .refill_vaddr_o     (),
+        .refill_vaddr_w_o   (),
         .refill_resp_valid_i(1'b0),
-        .refill_paddr_i     ({PADDR_WIDTH{1'b0}}),
+        .refill_paddr_w_i   ({(PADDR_WIDTH-2){1'b0}}),
         .refill_fault_i     (1'b0),
         .flush_i            (sfence_flush_i[h])
       );
@@ -144,7 +144,7 @@ module sukuna_mmu #(
     .satp_hart1_i     (satp_hart1_i),
     .satp_hart2_i     (satp_hart2_i),
     .mem_req_valid_o  (ptw_mem_req_valid_o),
-    .mem_req_paddr_o  (ptw_mem_req_paddr_o),
+    .mem_req_paddr_w_o  (ptw_mem_req_paddr_w_o),
     .mem_req_ready_i  (ptw_mem_req_ready_i),
     .mem_resp_valid_i (ptw_mem_resp_valid_i),
     .mem_resp_data_i  (ptw_mem_resp_data_i)

@@ -10,7 +10,11 @@
 // Architecture Parameters
 `define XLEN              64
 `define VADDR_WIDTH       64
-`define PADDR_WIDTH       56
+
+`ifndef PADDR_WIDTH
+`define PADDR_WIDTH       40
+`endif
+
 `define NUM_HARTS         3
 
 `define HART_KERNEL       0
@@ -20,9 +24,30 @@
 // Cache Parameters
 `define CACHE_LINE_BYTES  64
 `define CACHE_LINE_BITS   512
+
+`ifndef L1I_WAYS
+`define L1I_WAYS          4
+`endif
+
+`ifndef L1D_WAYS
+`define L1D_WAYS          4
+`endif
+
+`ifndef L2_WAYS
+`define L2_WAYS           8
+`endif
+
+`ifndef L1I_SIZE_BYTES
 `define L1I_SIZE_BYTES    16384
+`endif
+
+`ifndef L1D_SIZE_BYTES
 `define L1D_SIZE_BYTES    16384
+`endif
+
+`ifndef L2_SIZE_BYTES
 `define L2_SIZE_BYTES     262144
+`endif
 
 // MMU & TLB Parameters
 `define L1_TLB_ENTRIES    8
@@ -63,5 +88,50 @@
 `define MEM_SH            3'b101
 `define MEM_SW            3'b110
 `define MEM_SD            3'b111
+
+// System / CSR Operations
+`define SYS_NONE          3'b000
+`define SYS_CSRRW         3'b001
+`define SYS_CSRRS         3'b010
+`define SYS_CSRRC         3'b011
+`define SYS_PRIV          3'b100
+
+// Privileged Sub-ops (when SYS_PRIV)
+`define PRIV_NONE         3'b000
+`define PRIV_ECALL        3'b001
+`define PRIV_EBREAK       3'b010
+`define PRIV_MRET         3'b011
+`define PRIV_SRET         3'b100
+`define PRIV_WFI          3'b101
+`define PRIV_SFENCE_VMA   3'b110
+
+// Exception Causes
+`define EXC_INST_ADDR_MISALIGNED  6'd0
+`define EXC_INST_ACCESS_FAULT     6'd1
+`define EXC_ILLEGAL_INST          6'd2
+`define EXC_BREAKPOINT            6'd3
+`define EXC_LOAD_ADDR_MISALIGNED  6'd4
+`define EXC_LOAD_ACCESS_FAULT     6'd5
+`define EXC_STORE_ADDR_MISALIGNED 6'd6
+`define EXC_STORE_ACCESS_FAULT    6'd7
+`define EXC_ECALL_U               6'd8
+`define EXC_ECALL_S               6'd9
+`define EXC_ECALL_M               6'd11
+`define EXC_INST_PAGE_FAULT       6'd12
+`define EXC_LOAD_PAGE_FAULT       6'd13
+`define EXC_STORE_PAGE_FAULT      6'd15
+
+// Interrupt Causes (bit 63 = 1)
+`define INT_S_SOFTWARE            6'd1
+`define INT_M_SOFTWARE            6'd3
+`define INT_S_TIMER               6'd5
+`define INT_M_TIMER               6'd7
+`define INT_S_EXTERNAL            6'd9
+`define INT_M_EXTERNAL            6'd11
+
+// Target Platform Synthesis Directives
+// Define SYNTH_KINTEX7 to instantiate Xilinx Kintex-7 DSP48E1 primitives directly
+// (Can also be passed via compiler flag -DSYNTH_KINTEX7)
+// `define SYNTH_KINTEX7 1
 
 `endif // SUKUNA_DEFINES_VH

@@ -10,7 +10,7 @@
 
 `include "sukuna_defines.vh"
 
-module sukuna_ram_dist #(
+module sk_ram_dist #(
   parameter DATA_WIDTH = 64,
   parameter ADDR_WIDTH = 6,
   parameter DEPTH      = (1 << ADDR_WIDTH)

@@ -9,7 +9,7 @@
 
 `include "sukuna_defines.vh"
 
-module sukuna_lib_shift #(
+module sk_shift #(
   parameter WIDTH      = 64,
   parameter SHIFT_BITS = 6, // 2^6 = 64
   parameter PIPELINE   = 0

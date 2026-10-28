@@ -95,7 +95,7 @@ module sukuna_top #(
   wire                       l2_req_valid;
   wire                       l2_req_write;
   wire [3:0]                 l2_req_source;
-  wire [PADDR_WIDTH-1:0]     l2_req_paddr;
+  wire [PADDR_WIDTH-1:2]     l2_req_paddr_w;
   wire [CACHE_LINE_BITS-1:0] l2_req_wdata;
   wire                       l2_req_ready;
   wire                       l2_resp_valid;
@@ -105,7 +105,7 @@ module sukuna_top #(
   // L2 Cache <-> BIU wires
   wire                       mem_req_valid;
   wire                       mem_req_write;
-  wire [PADDR_WIDTH-1:0]     mem_req_paddr;
+  wire [PADDR_WIDTH-1:2]     mem_req_paddr_w;
   wire [CACHE_LINE_BITS-1:0] mem_req_wdata;
   wire                       mem_req_ready;
   wire                       mem_resp_valid;
@@ -155,7 +155,7 @@ module sukuna_top #(
     .l2_req_valid_o  (l2_req_valid),
     .l2_req_write_o  (l2_req_write),
     .l2_req_source_o (l2_req_source),
-    .l2_req_paddr_o  (l2_req_paddr),
+    .l2_req_paddr_w_o(l2_req_paddr_w),
     .l2_req_wdata_o  (l2_req_wdata),
     .l2_req_ready_i  (l2_req_ready),
     .l2_resp_valid_i (l2_resp_valid),
@@ -175,7 +175,7 @@ module sukuna_top #(
     .req_valid_i     (l2_req_valid),
     .req_write_i     (l2_req_write),
     .req_source_i    (l2_req_source),
-    .req_paddr_i     (l2_req_paddr),
+    .req_paddr_w_i   (l2_req_paddr_w),
     .req_wdata_i     (l2_req_wdata),
     .req_ready_o     (l2_req_ready),
     .resp_valid_o    (l2_resp_valid),
@@ -183,7 +183,7 @@ module sukuna_top #(
     .resp_rdata_o    (l2_resp_rdata),
     .mem_req_valid_o (mem_req_valid),
     .mem_req_write_o (mem_req_write),
-    .mem_req_paddr_o (mem_req_paddr),
+    .mem_req_paddr_w_o(mem_req_paddr_w),
     .mem_req_wdata_o (mem_req_wdata),
     .mem_req_ready_i (mem_req_ready),
     .mem_resp_valid_i(mem_resp_valid),
@@ -204,7 +204,7 @@ module sukuna_top #(
     .rst_ni          (core_rst_n),
     .mem_req_valid_i (mem_req_valid),
     .mem_req_write_i (mem_req_write),
-    .mem_req_paddr_i (mem_req_paddr),
+    .mem_req_paddr_w_i(mem_req_paddr_w),
     .mem_req_wdata_i (mem_req_wdata),
     .mem_req_ready_o (mem_req_ready),
     .mem_resp_valid_o(mem_resp_valid),

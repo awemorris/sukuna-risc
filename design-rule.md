@@ -24,13 +24,13 @@
 
 | メモリ種別 | 抽象化モジュール | 読み出しタイミング | 推奨用途 | FPGA実装対象 | ASIC実装対象 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **BRAM** | `sukuna_ram_bram` | **同期（1〜2サイクル・パイプライン）**<br>※非同期読み出し不可 | L1I/L1D キャッシュデータ・タグアレイ、L2キャッシュ | Block RAM / UltraRAM | SRAM マクロ (SP/DP SRAM) |
-| **Distributed RAM** | `sukuna_ram_dist` | **同期（1サイクル）**<br>※非同期読み出し不可 | TLB (L1/L2-TLB)、BPU (BTB/BHT)、キュー/FIFO | LUT RAM (SLICEM) | レジスタファイルセル / ラッチアレイ |
-| **FF RAM** | `sukuna_ram_ff` | **非同期（0サイクル・組合せ回路）**<br>※同サイクルでデータ出力 | GPR (汎用レジスタファイル)、多ポート同期バッファ | フリップフロップ (FF / DFF) | スタンダードセル DFF アレイ |
+| **BRAM** | `sk_ram_bram` | **同期（1〜2サイクル・パイプライン）**<br>※非同期読み出し不可 | L1I/L1D キャッシュデータ・タグアレイ、L2キャッシュ | Block RAM / UltraRAM | SRAM マクロ (SP/DP SRAM) |
+| **Distributed RAM** | `sk_ram_dist` | **同期（1サイクル）**<br>※非同期読み出し不可 | TLB (L1/L2-TLB)、BPU (BTB/BHT)、キュー/FIFO | LUT RAM (SLICEM) | レジスタファイルセル / ラッチアレイ |
+| **FF RAM** | `sk_ram_ff` | **非同期（0サイクル・組合せ回路）**<br>※同サイクルでデータ出力 | GPR (汎用レジスタファイル)、多ポート同期バッファ | フリップフロップ (FF / DFF) | スタンダードセル DFF アレイ |
 
 > [!IMPORTANT]
 > **BRAM および Distributed RAM はパイプライン化されており、非同期（クロック非同期のコンビネーショナル）での読み出しはできません。**
-> 1サイクル内でアドレスを与えて即座にデータを取り出したい場合は、明示的に `sukuna_ram_ff` を使用するか、パイプライン段を再設計して同期読み出しに適合させてください。
+> 1サイクル内でアドレスを与えて即座にデータを取り出したい場合は、明示的に `sk_ram_ff` を使用するか、パイプライン段を再設計して同期読み出しに適合させてください。
 
 ### 2.3 128ビット以下レジスタの推論制御ディレクティブ (厳格定義)
 128ビット以下のスカラ・ベクトルレジスタ（`reg [...] my_reg_q;`）は、意図しない Block RAM やシフトレジスタ (SRL16/SRL32) への推論を禁止し、必ず個別フリップフロップ (FF) として合成させるため、**行末に以下の共通ブロックコメント形式のディレクティブを付与**します。
@@ -62,14 +62,20 @@
 乗算器、除算器、加減算器、積和演算器、シフタなどの演算器は、ターゲット環境によって FPGA の DSP スライス（DSP48E2等）や ASIC のデータパスジェネレータ（DW / Synopsys DesignWare等）に置換できるよう、`rtl/library/` の抽象化セルを使用します。
 
 ### 抽象化セル一覧
-- `sukuna_lib_add`: 加算器 (Adder)
-- `sukuna_lib_sub`: 減算器 (Subtractor)
-- `sukuna_lib_addsub`: 加減算器 (Add/Sub 切り替え)
-- `sukuna_lib_mul`: 乗算器 (Multiplier, 符号付き/符号なし, パイプライン化可能)
-- `sukuna_lib_div`: 除算器 (Divider, 商・剰余算出)
-- `sukuna_lib_fma`: 積和演算器 (Fused Multiply-Add: `A * B + C`)
-- `sukuna_lib_shift`: シフタ (Barrel Shifter: SLL, SRL, SRA)
-- `sukuna_lib_msb`: MSB検出 / Leading Zero Counter (CLZ / Priority Encoder)
+- `sk_add`: 加算器 (Adder, パラメータ `IMPL = "CARRY" / "LOGIC" / "DSP"`)
+- `sk_sub`: 減算器 (Subtractor, パラメータ `IMPL = "CARRY" / "LOGIC" / "DSP"`)
+- `sk_addsub`: 加減算器 (Add/Sub 切り替え, パラメータ `IMPL = "CARRY" / "LOGIC" / "DSP"`)
+- `sk_mul`: 乗算器 (DSP Multiplier, パラメータ `IMPL = "DSP" / "CARRY" / "LOGIC"`, パイプライン化可能)
+- `sk_div`: 除算器 (Divider, パラメータ `IMPL = "CARRY" / "LOGIC" / "DSP"`)
+- `sk_fma`: 積和演算器 (Fused Multiply-Add: `A * B + C`, パラメータ `IMPL = "DSP" / "CARRY" / "LOGIC"`)
+- `sk_shift`: シフタ (Barrel Shifter: SLL, SRL, SRA)
+- `sk_msb`: MSB検出 / Leading Zero Counter (CLZ / Priority Encoder)
+
+### 3.1 演算器の実装指定パラメータ (`IMPL`)
+各演算モジュールは `parameter IMPL` により生成されるハードウェア構造を明示的に指定可能：
+- `"DSP"`: ハードウェアDSPスライス（`DSP48E1` 直接生成または属性 `(* use_dsp = "yes" *)`）
+- `"CARRY"`: スライス内専用キャリーチェーン（`CARRY4` による高速加減算）
+- `"LOGIC"`: 純粋な汎用LUTロジックゲート（DSP/キャリーチェーンを使わない合成）
 
 ---
 

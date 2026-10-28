@@ -98,6 +98,8 @@ module sukuna_shared_ex #(
     .req_rd_i       (fp_rd),
     .req_src1_i     (fp_src1),
     .req_src2_i     (fp_src2),
+    .req_is_mul_i   (1'b0),
+    .req_is_sub_i   (1'b0),
     .busy_o         (fp_busy),
     .resp_valid_o   (fp_resp_valid),
     .resp_hart_id_o (fp_resp_hart_id),

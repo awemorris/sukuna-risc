@@ -29,21 +29,21 @@ module sukuna_ptw #(
   input  wire [XLEN-1:0]        satp_hart1_i,
   input  wire [XLEN-1:0]        satp_hart2_i,
 
-  // Memory interface to L2 cache / Interconnect for PTE reads
+  // Memory interface to L2 cache / Interconnect for PTE reads (word-aligned)
   output wire                   mem_req_valid_o,
-  output wire [PADDR_WIDTH-1:0] mem_req_paddr_o,
+  output wire [PADDR_WIDTH-1:2] mem_req_paddr_w_o,
   input  wire                   mem_req_ready_i,
   input  wire                   mem_resp_valid_i,
   input  wire [XLEN-1:0]        mem_resp_data_i
 );
 
-  assign req_ready_o      = 1'b1;
-  assign resp_valid_o     = req_valid_i;
-  assign resp_hart_id_o   = req_hart_id_i;
-  assign resp_paddr_o     = req_vaddr_i[PADDR_WIDTH-1:0];
-  assign resp_fault_o     = 1'b0;
+  assign req_ready_o        = 1'b1;
+  assign resp_valid_o       = req_valid_i;
+  assign resp_hart_id_o     = req_hart_id_i;
+  assign resp_paddr_o       = req_vaddr_i[PADDR_WIDTH-1:0];
+  assign resp_fault_o       = 1'b0;
 
-  assign mem_req_valid_o  = 1'b0;
-  assign mem_req_paddr_o  = {PADDR_WIDTH{1'b0}};
+  assign mem_req_valid_o    = 1'b0;
+  assign mem_req_paddr_w_o  = {(PADDR_WIDTH-2){1'b0}};
 
 endmodule

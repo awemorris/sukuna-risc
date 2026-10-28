@@ -36,18 +36,18 @@ module sukuna_thread_pipe #(
   // L1-ITLB Interface
   // --------------------------------------------------------------------------
   output wire                       itlb_req_valid_o,
-  output wire [VADDR_WIDTH-1:0]     itlb_vaddr_o,
+  output wire [VADDR_WIDTH-1:2]     itlb_vaddr_w_o,
   input  wire                       itlb_hit_i,
-  input  wire [PADDR_WIDTH-1:0]     itlb_paddr_i,
+  input  wire [PADDR_WIDTH-1:2]     itlb_paddr_w_i,
   input  wire                       itlb_fault_i,
 
   // --------------------------------------------------------------------------
   // L1I Cache Interface
   // --------------------------------------------------------------------------
   output wire                       l1i_req_valid_o,
-  output wire [PADDR_WIDTH-1:0]     l1i_paddr_o,
+  output wire [PADDR_WIDTH-1:2]     l1i_paddr_w_o,
   input  wire                       l1i_resp_valid_i,
-  input  wire [31:0]                l1i_inst_i,
+  input  wire [63:0]                l1i_inst_i,
   input  wire                       l1i_miss_i,
   output wire                       fence_i_flush_o,
 
@@ -55,9 +55,9 @@ module sukuna_thread_pipe #(
   // L1-DTLB Interface
   // --------------------------------------------------------------------------
   output wire                       dtlb_lookup_valid_o,
-  output wire [VADDR_WIDTH-1:0]     dtlb_vaddr_o,
+  output wire [VADDR_WIDTH-1:2]     dtlb_vaddr_w_o,
   input  wire                       dtlb_hit_i,
-  input  wire [PADDR_WIDTH-1:0]     dtlb_paddr_i,
+  input  wire [PADDR_WIDTH-1:2]     dtlb_paddr_w_i,
   input  wire                       dtlb_fault_i,
 
   // --------------------------------------------------------------------------
@@ -66,7 +66,8 @@ module sukuna_thread_pipe #(
   output wire                       l1d_req_valid_o,
   output wire                       l1d_req_write_o,
   output wire [2:0]                 l1d_req_op_o,
-  output wire [PADDR_WIDTH-1:0]     l1d_paddr_o,
+  output wire [7:0]                 l1d_req_byte_en_o,
+  output wire [PADDR_WIDTH-1:2]     l1d_paddr_w_o,
   output wire [XLEN-1:0]            l1d_wdata_o,
   input  wire                       l1d_req_ready_i,
   input  wire                       l1d_resp_valid_i,
@@ -173,6 +174,11 @@ module sukuna_thread_pipe #(
   wire [4:0]      rf_waddr_p0, rf_waddr_p1, rf_waddr_p2;
   wire [XLEN-1:0] rf_wdata_p0, rf_wdata_p1, rf_wdata_p2;
 
+  // Branch & Mispredict Redirection
+  wire            branch_mispredict;
+  wire [XLEN-1:0] branch_target;
+  wire [XLEN-1:0] if1_redirect_pc = branch_mispredict ? branch_target : trap_target_pc;
+
   // --------------------------------------------------------------------------
   // Stage 1: IF1
   // --------------------------------------------------------------------------
@@ -186,15 +192,15 @@ module sukuna_thread_pipe #(
     .rst_ni           (rst_ni),
     .stall_i          (stall_if1),
     .flush_i          (flush_if1),
-    .redirect_pc_i    (trap_target_pc),
+    .redirect_pc_i    (if1_redirect_pc),
     .fetch_step_i     (fetch_step),
     .itlb_req_valid_o (itlb_req_valid_o),
-    .itlb_vaddr_o     (itlb_vaddr_o),
+    .itlb_vaddr_w_o   (itlb_vaddr_w_o),
     .itlb_hit_i       (itlb_hit_i),
-    .itlb_paddr_i     (itlb_paddr_i),
+    .itlb_paddr_w_i   (itlb_paddr_w_i),
     .itlb_fault_i     (itlb_fault_i),
     .l1i_req_valid_o  (l1i_req_valid_o),
-    .l1i_paddr_o      (l1i_paddr_o),
+    .l1i_paddr_w_o    (l1i_paddr_w_o),
     .if1_valid_o      (if1_valid),
     .if1_pc_o         (if1_pc)
   );
@@ -439,16 +445,19 @@ module sukuna_thread_pipe #(
     .int_en_l1_i        (ex_int_en_l1),
     .ma_en_l0_i         (ex_ma_en_l0),
     .ma_en_l1_i         (ex_ma_en_l1),
+    .branch_mispredict_o(branch_mispredict),
+    .branch_target_o    (branch_target),
     .ex_stall_o         (ex_stall),
     .dtlb_lookup_valid_o(dtlb_lookup_valid_o),
-    .dtlb_vaddr_o       (dtlb_vaddr_o),
+    .dtlb_vaddr_w_o     (dtlb_vaddr_w_o),
     .dtlb_hit_i         (dtlb_hit_i),
-    .dtlb_paddr_i       (dtlb_paddr_i),
+    .dtlb_paddr_w_i     (dtlb_paddr_w_i),
     .dtlb_fault_i       (dtlb_fault_i),
     .l1d_req_valid_o    (l1d_req_valid_o),
     .l1d_req_write_o    (l1d_req_write_o),
     .l1d_req_op_o       (l1d_req_op_o),
-    .l1d_paddr_o        (l1d_paddr_o),
+    .l1d_req_byte_en_o  (l1d_req_byte_en_o),
+    .l1d_paddr_w_o      (l1d_paddr_w_o),
     .l1d_wdata_o        (l1d_wdata_o),
     .l1d_req_ready_i    (l1d_req_ready_i),
     .l1d_resp_valid_i   (l1d_resp_valid_i),
@@ -519,7 +528,7 @@ module sukuna_thread_pipe #(
     .id1_rs2_l0_i       (id1_rs2_0),
     .id1_rs1_l1_i       (id1_rs1_1),
     .id1_rs2_l1_i       (id1_rs2_1),
-    .branch_mispredict_i(1'b0),
+    .branch_mispredict_i(branch_mispredict),
     .trap_flush_i       (trap_flush),
     .stall_if1_o        (stall_if1),
     .stall_if2_o        (stall_if2),

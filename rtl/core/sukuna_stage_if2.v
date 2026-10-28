@@ -3,9 +3,11 @@
 // Complies with design-rule.md
 // ============================================================================
 // Responsibilities:
-//   - Receives instruction data from L1I cache
-//   - RVC 16-bit to 32-bit expansion
-//   - Extracts dual-issue candidate pair (inst0: older, inst1: younger)
+//   - Receives 64-bit instruction fetch data from L1I cache
+//   - Extracts dual-issue candidate pair:
+//     * Lane 0 (inst0): l1i_inst_i[31:0] at if1_pc_i
+//     * Lane 1 (inst1): l1i_inst_i[63:32] at if1_pc_i + 4
+//   - Drives instruction bits directly to ID1
 // ============================================================================
 
 `include "sukuna_defines.vh"
@@ -24,9 +26,9 @@ module sukuna_stage_if2 #(
   input  wire             if1_valid_i,
   input  wire [XLEN-1:0]  if1_pc_i,
 
-  // L1I Response Interface
+  // L1I Response Interface (64-bit instruction pair fetch block)
   input  wire             l1i_resp_valid_i,
-  input  wire [31:0]      l1i_inst_i,
+  input  wire [63:0]      l1i_inst_i,
   input  wire             l1i_miss_i,
 
   // Pipeline registers to ID1 stage
@@ -52,15 +54,15 @@ module sukuna_stage_if2 #(
         if2_valid0_o <= 1'b0;
         if2_valid1_o <= 1'b0;
       end else if (!stall_i) begin
-        // Lane 0: Primary instruction
+        // Lane 0: Older instruction (lower 32 bits)
         if2_valid0_o <= if1_valid_i && l1i_resp_valid_i;
         if2_pc0_o    <= if1_pc_i;
-        if2_inst0_o  <= l1i_inst_i;
+        if2_inst0_o  <= l1i_inst_i[31:0];
 
-        // Lane 1: Second instruction candidate (stub: NOP or consecutive)
+        // Lane 1: Younger instruction (upper 32 bits)
         if2_valid1_o <= if1_valid_i && l1i_resp_valid_i;
         if2_pc1_o    <= if1_pc_i + 64'd4;
-        if2_inst1_o  <= 32'h00000013; // Default NOP in stub
+        if2_inst1_o  <= l1i_inst_i[63:32];
       end
     end
   end

@@ -18,7 +18,7 @@ module sukuna_biu_axi4 #(
   // L2 / Core Refill & Evict Interface
   input  wire                       mem_req_valid_i,
   input  wire                       mem_req_write_i,
-  input  wire [PADDR_WIDTH-1:0]     mem_req_paddr_i,
+  input  wire [PADDR_WIDTH-1:2]     mem_req_paddr_w_i,
   input  wire [CACHE_LINE_BITS-1:0] mem_req_wdata_i,
   output wire                       mem_req_ready_o,
   output wire                       mem_resp_valid_o,

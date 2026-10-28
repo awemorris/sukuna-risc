@@ -3,7 +3,7 @@
 # ============================================================================
 
 # Preprocessor definitions and include paths
-verilog_defines -DSYNTHESIS=1
+verilog_defines -DSYNTHESIS=1 -DSYNTH_KINTEX7=1
 verilog_defaults -add -Irtl/include -Irtl/library -Irtl/core -Irtl/shared_ex -Irtl/mmu -Irtl/cache -Irtl/interrupt -Irtl/bus -Ibsp/kc705
 
 # Read Library and Subsystem Verilog Sources

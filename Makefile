@@ -4,6 +4,23 @@
 
 SHELL := /bin/bash
 
+# Configuration Parameters
+-include config.mk
+
+PADDR_WIDTH    ?= 40
+L1I_WAYS       ?= 4
+L1D_WAYS       ?= 4
+L2_WAYS        ?= 8
+L1I_SIZE_BYTES ?= 16384
+L1D_SIZE_BYTES ?= 16384
+L2_SIZE_BYTES  ?= 262144
+
+CONFIG_DEFINES := -DPADDR_WIDTH=$(PADDR_WIDTH) -DL1I_WAYS=$(L1I_WAYS) \
+                  -DL1D_WAYS=$(L1D_WAYS) -DL2_WAYS=$(L2_WAYS) \
+                  -DL1I_SIZE_BYTES=$(L1I_SIZE_BYTES) \
+                  -DL1D_SIZE_BYTES=$(L1D_SIZE_BYTES) \
+                  -DL2_SIZE_BYTES=$(L2_SIZE_BYTES)
+
 # Project & Board Parameters
 TOP_MODULE     ?= sukuna_top
 KC705_TOP      ?= sukuna_kc705_top
@@ -76,11 +93,11 @@ lint: lint-verilator lint-iverilog
 
 lint-verilator:
 	@echo "==> Running Verilator lint..."
-	$(VERILATOR) --lint-only --top-module $(TOP_MODULE) $(INCLUDES) $(ALL_RTL_SRCS)
+	$(VERILATOR) --lint-only --top-module $(TOP_MODULE) $(CONFIG_DEFINES) $(INCLUDES) $(ALL_RTL_SRCS)
 
 lint-iverilog:
 	@echo "==> Running Icarus Verilog syntax check..."
-	$(IVERILOG) -g2005 -Wall -Wno-timescale $(INCLUDES) -o /dev/null $(ALL_RTL_SRCS)
+	$(IVERILOG) -g2005 -Wall -Wno-timescale $(CONFIG_DEFINES) $(INCLUDES) -o /dev/null $(ALL_RTL_SRCS)
 
 # ----------------------------------------------------------------------------
 # OpenXC7 Flow Targets (Kintex-7 / KC705)

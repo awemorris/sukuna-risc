@@ -6,7 +6,7 @@
 
 `include "sukuna_defines.vh"
 
-module sukuna_lib_msb #(
+module sk_msb #(
   parameter WIDTH     = 64,
   parameter IDX_WIDTH = 6  // 2^6 = 64
 )(

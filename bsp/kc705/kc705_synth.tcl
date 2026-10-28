@@ -23,6 +23,7 @@ add_files -fileset sources_1 ./sukuna_kc705_top.v
 add_files -fileset constrs_1 ./kc705.xdc
 
 set_property include_dirs [list ../../rtl/include ../../rtl/library] [get_filesets sources_1]
+set_property verilog_define [list SYNTH_KINTEX7=1] [get_filesets sources_1]
 set_property top sukuna_kc705_top [current_fileset]
 
 # Synthesis
