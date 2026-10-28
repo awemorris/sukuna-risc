@@ -9,6 +9,8 @@
 //   - Word-aligned address interface (mem_paddr_w_i[PADDR_WIDTH-1:2])
 //   - Byte enable vector (mem_byte_en_i[7:0]) replaces address lower 2/3 bits
 //   - Direct byte write enable via sk_ram_bram wstrb_i
+//   - Dirty line eviction (Writeback to L2) before refill
+//   - Multi-Hart Snoop invalidate support
 // ============================================================================
 
 `include "sukuna_defines.vh"
@@ -42,10 +44,10 @@ module sukuna_l1d_cache #(
   output wire                       snoop_hit_o,
 
   // L2 Refill / Writeback Port
-  output wire                       l2_req_valid_o,
-  output wire                       l2_req_write_o,
-  output wire [PADDR_WIDTH-1:2]     l2_line_paddr_w_o,
-  output wire [CACHE_LINE_BITS-1:0] l2_wline_data_o,
+  output reg                        l2_req_valid_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg                        l2_req_write_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [PADDR_WIDTH-1:2]     l2_line_paddr_w_o, /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [CACHE_LINE_BITS-1:0] l2_wline_data_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   input  wire                       l2_req_ready_i,
   input  wire                       l2_resp_valid_i,
   input  wire [CACHE_LINE_BITS-1:0] l2_rline_data_i
@@ -65,10 +67,6 @@ module sukuna_l1d_cache #(
   localparam OFFSET_BITS = 6;
   localparam TAG_WIDTH   = PADDR_WIDTH - INDEX_BITS - OFFSET_BITS;
 
-  // Word address [PADDR_WIDTH-1:2] breakdown:
-  // [5:2]: word index within line (4 bits -> 16 words of 32-bit = 8 doublewords)
-  // [5+INDEX_BITS : 6]: set index
-  // [PADDR_WIDTH-1 : 6+INDEX_BITS]: tag
   wire [3:0]            req_word_offset = mem_paddr_w_i[5:2];
   wire [INDEX_BITS-1:0] req_index       = mem_paddr_w_i[5+INDEX_BITS:6];
   wire [TAG_WIDTH-1:0]  req_tag         = mem_paddr_w_i[PADDR_WIDTH-1:6+INDEX_BITS];
@@ -82,6 +80,25 @@ module sukuna_l1d_cache #(
   reg [PADDR_WIDTH-1:2]  req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]         req_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
+  // State Machine for Miss & Eviction
+  localparam S_IDLE   = 2'd0;
+  localparam S_EVICT  = 2'd1;
+  localparam S_REFILL = 2'd2;
+
+  localparam WAY_BITS = (WAYS <= 2)  ? 1 :
+                        (WAYS <= 4)  ? 2 :
+                        (WAYS <= 8)  ? 3 :
+                        (WAYS <= 16) ? 4 : 5;
+
+  reg [1:0]          state_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [WAY_BITS-1:0] victim_ptr_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  localparam integer MAX_WAY_IDX = WAYS - 1;
+
+  // Per-way valid bit register array (resets to 0)
+  reg [SETS-1:0]     way_valid_q [0:WAYS-1];
+
+  wire is_busy = (state_q != S_IDLE);
+
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       req_valid_q   <= 1'b0;
@@ -91,7 +108,7 @@ module sukuna_l1d_cache #(
       req_tag_q     <= {TAG_WIDTH{1'b0}};
       req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
       req_wdata_q   <= {XLEN{1'b0}};
-    end else if (!mem_miss_stall_o) begin
+    end else if (!is_busy) begin
       req_valid_q   <= mem_req_valid_i;
       req_write_q   <= mem_req_write_i;
       req_byte_en_q <= mem_byte_en_i;
@@ -109,15 +126,17 @@ module sukuna_l1d_cache #(
   wire [CACHE_LINE_BITS-1:0] data_rdata [0:WAYS-1];
   wire [WAYS-1:0]            way_hit;
 
-  localparam integer MAX_WAY_IDX = WAYS - 1;
-  reg [4:0] victim_ptr_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg       miss_busy_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  // Snoop check signals
+  wire [INDEX_BITS-1:0] snoop_index = snoop_paddr_w_i[5+INDEX_BITS:6];
+  wire [TAG_WIDTH-1:0]  snoop_tag   = snoop_paddr_w_i[PADDR_WIDTH-1:6+INDEX_BITS];
+  wire [WAYS-1:0]       snoop_way_hit;
 
   genvar w;
   generate
     for (w = 0; w < WAYS; w = w + 1) begin : gen_dway
-      wire way_refill_wen = refill_done && (victim_ptr_q == w[4:0]);
-      wire way_write_hit  = req_valid_q && req_write_q && way_hit[w];
+      wire way_refill_wen = (state_q == S_REFILL) && l2_resp_valid_i && (victim_ptr_q == w[WAY_BITS-1:0]);
+      wire way_write_hit  = (state_q == S_IDLE) && req_valid_q && req_write_q && way_hit[w];
+      wire way_snoop_inv  = snoop_req_valid_i && snoop_invalidate_i && snoop_way_hit[w];
 
       // Tag Array ({dirty, valid, tag})
       sk_ram_bram #(
@@ -129,12 +148,14 @@ module sukuna_l1d_cache #(
       ) u_dtag_ram (
         .clk_i  (clk_i),
         .rst_ni (rst_ni),
-        .wen_i  (way_refill_wen || way_write_hit),
+        .wen_i  (way_refill_wen || way_write_hit || way_snoop_inv),
         .wstrb_i(1'b1),
-        .waddr_i(way_refill_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index),
-        .wdata_i(way_write_hit ? {1'b1, 1'b1, req_tag_q} : {1'b0, 1'b1, req_tag_q}),
-        .ren_i  (mem_req_valid_i),
-        .raddr_i(req_index),
+        .waddr_i(way_snoop_inv ? snoop_index : (way_refill_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index)),
+        .wdata_i(way_snoop_inv ? {(TAG_WIDTH+2){1'b0}} :
+                 way_write_hit ? {1'b1, 1'b1, req_tag_q} :
+                 way_refill_wen ? {req_write_q, 1'b1, req_tag_q} : {(TAG_WIDTH+2){1'b0}}),
+        .ren_i  (mem_req_valid_i || snoop_req_valid_i),
+        .raddr_i(snoop_req_valid_i ? snoop_index : req_index),
         .rdata_o(tag_rdata[w])
       );
 
@@ -158,8 +179,10 @@ module sukuna_l1d_cache #(
         .rdata_o(data_rdata[w])
       );
 
-      assign way_hit[w] = req_valid_q && tag_rdata[w][TAG_WIDTH] &&
-                          (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
+      assign way_hit[w]       = req_valid_q && way_valid_q[w][req_paddr_w_q[5+INDEX_BITS:6]] &&
+                                (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
+      assign snoop_way_hit[w] = way_valid_q[w][snoop_index] &&
+                                (tag_rdata[w][TAG_WIDTH-1:0] == snoop_tag);
     end
   endgenerate
 
@@ -167,6 +190,7 @@ module sukuna_l1d_cache #(
   // Hit Selection and Response
   // --------------------------------------------------------------------------
   wire hit = |way_hit;
+  assign snoop_hit_o = |snoop_way_hit;
 
   reg [CACHE_LINE_BITS-1:0] hit_line_data;
   integer k;
@@ -177,43 +201,98 @@ module sukuna_l1d_cache #(
     end
   end
 
+  wire refill_done = (state_q == S_REFILL) && l2_resp_valid_i;
+  wire [CACHE_LINE_BITS-1:0] eff_line_data = refill_done ? l2_rline_data_i : hit_line_data;
+
   wire [XLEN-1:0] line_dword [0:7];
   genvar di;
   generate
     for (di = 0; di < 8; di = di + 1) begin : gen_dwords
-      assign line_dword[di] = hit_line_data[di*64 +: 64];
+      assign line_dword[di] = eff_line_data[di*64 +: 64];
     end
   endgenerate
 
-  assign mem_req_ready_o  = !miss_busy_q;
-  assign mem_resp_valid_o = hit && !miss_busy_q;
+  assign mem_req_ready_o  = !is_busy;
+  assign mem_resp_valid_o = (hit && !is_busy) || (refill_done && !req_write_q);
   assign mem_rdata_o      = line_dword[req_offset_q[3:1]];
-  assign mem_miss_stall_o = req_valid_q && !hit;
+  assign mem_miss_stall_o = ((req_valid_q && !hit) || is_busy) && !refill_done;
 
   // --------------------------------------------------------------------------
-  // Refill / Writeback to L2
+  // Eviction & Refill State Machine
   // --------------------------------------------------------------------------
-  wire refill_done = l2_resp_valid_i;
+  wire victim_dirty = way_valid_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] &&
+                      (tag_rdata[victim_ptr_q][TAG_WIDTH+1] == 1'b1);
+  wire [TAG_WIDTH-1:0] victim_tag = tag_rdata[victim_ptr_q][TAG_WIDTH-1:0];
 
-  assign l2_req_valid_o    = mem_miss_stall_o && !miss_busy_q;
-  assign l2_req_write_o    = 1'b0; // Clean on read miss (writeback queue in future)
-  assign l2_line_paddr_w_o = {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000};
-  assign l2_wline_data_o   = hit_line_data;
-
+  integer wy;
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      miss_busy_q  <= 1'b0;
-      victim_ptr_q <= 5'd0;
-    end else begin
-      if (l2_req_valid_o) begin
-        miss_busy_q <= 1'b1;
-      end else if (refill_done) begin
-        miss_busy_q  <= 1'b0;
-        victim_ptr_q <= (victim_ptr_q == MAX_WAY_IDX[4:0]) ? 5'd0 : victim_ptr_q + 5'd1;
+      state_q           <= S_IDLE;
+      victim_ptr_q      <= {WAY_BITS{1'b0}};
+      l2_req_valid_o    <= 1'b0;
+      l2_req_write_o    <= 1'b0;
+      l2_line_paddr_w_o <= {(PADDR_WIDTH-2){1'b0}};
+      l2_wline_data_o   <= {CACHE_LINE_BITS{1'b0}};
+      for (wy = 0; wy < WAYS; wy = wy + 1) begin
+        way_valid_q[wy] <= {SETS{1'b0}};
       end
+    end else begin
+      l2_req_valid_o <= 1'b0;
+
+      // Snoop invalidation
+      if (snoop_req_valid_i && snoop_invalidate_i) begin
+        for (wy = 0; wy < WAYS; wy = wy + 1) begin
+          if (snoop_way_hit[wy]) begin
+            way_valid_q[wy][snoop_index] <= 1'b0;
+          end
+        end
+      end
+
+      case (state_q)
+        S_IDLE: begin
+          if (req_valid_q && !hit) begin
+            if (victim_dirty) begin
+              // Evict dirty line to L2
+              l2_req_valid_o    <= 1'b1;
+              l2_req_write_o    <= 1'b1;
+              l2_line_paddr_w_o <= {victim_tag, req_paddr_w_q[5+INDEX_BITS:6], 4'b0000};
+              l2_wline_data_o   <= data_rdata[victim_ptr_q];
+              state_q           <= S_EVICT;
+            end else begin
+              // Read refill from L2
+              l2_req_valid_o    <= 1'b1;
+              l2_req_write_o    <= 1'b0;
+              l2_line_paddr_w_o <= {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000};
+              state_q           <= S_REFILL;
+            end
+          end
+        end
+
+        S_EVICT: begin
+          l2_req_valid_o    <= 1'b1;
+          l2_req_write_o    <= 1'b1;
+          if (l2_req_ready_i) begin
+            // Evict completed, now issue read refill
+            l2_req_write_o    <= 1'b0;
+            l2_line_paddr_w_o <= {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000};
+            state_q           <= S_REFILL;
+          end
+        end
+
+        S_REFILL: begin
+          l2_req_valid_o <= 1'b1;
+          l2_req_write_o <= 1'b0;
+          if (l2_resp_valid_i) begin
+            l2_req_valid_o <= 1'b0;
+            way_valid_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] <= 1'b1;
+            victim_ptr_q   <= (victim_ptr_q == MAX_WAY_IDX[WAY_BITS-1:0]) ? {WAY_BITS{1'b0}} : victim_ptr_q + 1'b1;
+            state_q        <= S_IDLE;
+          end
+        end
+
+        default: state_q <= S_IDLE;
+      endcase
     end
   end
-
-  assign snoop_hit_o = 1'b0;
 
 endmodule

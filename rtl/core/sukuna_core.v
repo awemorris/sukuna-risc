@@ -14,7 +14,8 @@ module sukuna_core #(
   parameter XLEN            = `XLEN,
   parameter VADDR_WIDTH     = `VADDR_WIDTH,
   parameter PADDR_WIDTH     = `PADDR_WIDTH,
-  parameter CACHE_LINE_BITS = `CACHE_LINE_BITS
+  parameter CACHE_LINE_BITS = `CACHE_LINE_BITS,
+  parameter RESET_PC        = 64'h0000_0000_8000_0000
 )(
   input  wire                               clk_i,
   input  wire                               rst_ni,
@@ -107,7 +108,8 @@ module sukuna_core #(
         .HART_ID    (h),
         .XLEN       (XLEN),
         .VADDR_WIDTH(VADDR_WIDTH),
-        .PADDR_WIDTH(PADDR_WIDTH)
+        .PADDR_WIDTH(PADDR_WIDTH),
+        .RESET_PC   (RESET_PC)
       ) u_thread (
         .clk_i              (clk_i),
         .rst_ni             (rst_ni),

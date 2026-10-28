@@ -79,6 +79,20 @@
 `define ALU_DIV           4'b1011
 `define ALU_REM           4'b1100
 
+// Branch Operations
+`define BR_NONE           3'b000
+`define BR_BEQ            3'b001
+`define BR_BNE            3'b010
+`define BR_BLT            3'b011
+`define BR_BGE            3'b100
+`define BR_BLTU           3'b101
+`define BR_BGEU           3'b110
+
+// Jump Operations
+`define JUMP_NONE         2'b00
+`define JUMP_JAL          2'b01
+`define JUMP_JALR         2'b10
+
 // Memory Access Operations
 `define MEM_LB            3'b000
 `define MEM_LH            3'b001

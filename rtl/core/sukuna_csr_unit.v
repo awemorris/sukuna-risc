@@ -20,15 +20,20 @@ module sukuna_csr_unit #(
   input  wire                   rst_ni,
 
   // --------------------------------------------------------------------------
-  // Pipeline CSR Access Interface (Lane 0 only, in-order)
+  // Pipeline CSR Read / Pre-Check Interface (Lane 0 EX stage)
   // --------------------------------------------------------------------------
   input  wire                   csr_req_valid_i,
-  input  wire [11:0]            csr_addr_i,
-  input  wire [1:0]             csr_op_i,        // 2'b01: RW, 2'b10: RS, 2'b11: RC
-  input  wire                   csr_wen_i,       // 1 if write side-effects should take place
-  input  wire [XLEN-1:0]        csr_wdata_i,
+  input  wire [11:0]            csr_raddr_i,
+  input  wire                   csr_rwen_i,       // 1 if instruction intends to write
   output reg  [XLEN-1:0]        csr_rdata_o,
   output wire                   csr_illegal_o,
+
+  // --------------------------------------------------------------------------
+  // Pipeline CSR Commit Interface (Lane 0 WB stage)
+  // --------------------------------------------------------------------------
+  input  wire                   csr_commit_wen_i,
+  input  wire [11:0]            csr_commit_addr_i,
+  input  wire [XLEN-1:0]        csr_commit_wdata_i,
 
   // --------------------------------------------------------------------------
   // Interrupt Signals from CLINT / PLIC
@@ -55,7 +60,7 @@ module sukuna_csr_unit #(
   // Control outputs to Frontend / MMU / Pipeline
   // --------------------------------------------------------------------------
   output wire                   trap_flush_o,
-  output reg  [XLEN-1:0]        trap_target_pc_o,
+  output wire [XLEN-1:0]        trap_target_pc_o,
   output reg  [XLEN-1:0]        satp_o,          /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [1:0]             priv_mode_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */ // 11: M, 01: S, 00: U
   output wire                   sfence_flush_o,
@@ -111,24 +116,8 @@ module sukuna_csr_unit #(
 
   wire [XLEN-1:0] mie_wire = {{(XLEN-12){1'b0}}, mie_q};
 
-  // S-mode view of status, ie, ip
-  wire [XLEN-1:0] sstatus_wire = {
-    mstatus_q[63],           // SD
-    {(XLEN-35){1'b0}},
-    mstatus_q[33:32],        // UXL
-    {(32-19){1'b0}},
-    mstatus_q[19],           // MXR
-    mstatus_q[18],           // SUM
-    1'b0,                    // Reserved
-    mstatus_q[15:13],        // XS, FS
-    4'b0000,
-    mstatus_q[8],            // SPP
-    1'b0,
-    mstatus_q[5],            // SPIE
-    2'b00,
-    mstatus_q[1],            // SIE
-    1'b0
-  };
+  // S-mode view of status, ie, ip (S-mode mask of mstatus)
+  wire [XLEN-1:0] sstatus_wire = mstatus_q & 64'h80000003_000DE162;
 
   wire [XLEN-1:0] sie_wire = mie_wire & {{(XLEN-16){1'b0}}, mideleg_q};
   wire [XLEN-1:0] sip_wire = mip_wire & {{(XLEN-16){1'b0}}, mideleg_q};
@@ -138,15 +127,15 @@ module sukuna_csr_unit #(
   // --------------------------------------------------------------------------
   // CSR address bits [9:8] define the minimum privilege required:
   // 00: User, 01: Supervisor, 11: Machine
-  wire [1:0] csr_min_priv = csr_addr_i[9:8];
-  wire       csr_read_only = (csr_addr_i[11:10] == 2'b11);
+  wire [1:0] csr_min_priv  = csr_raddr_i[9:8];
+  wire       csr_read_only = (csr_raddr_i[11:10] == 2'b11);
 
   wire priv_insufficient = (priv_mode_o < csr_min_priv);
-  wire write_to_ro       = csr_wen_i && csr_read_only;
+  wire write_to_ro       = csr_rwen_i && csr_read_only;
 
   reg csr_exists;
   always @(*) begin
-    case (csr_addr_i)
+    case (csr_raddr_i)
       12'h300, 12'h301, 12'h302, 12'h303, 12'h304, 12'h305,
       12'h340, 12'h341, 12'h342, 12'h343, 12'h344, 12'hF14,
       12'h100, 12'h104, 12'h105, 12'h140, 12'h141, 12'h142,
@@ -161,7 +150,7 @@ module sukuna_csr_unit #(
   // CSR Read Logic (Combinational for EX stage old value)
   // --------------------------------------------------------------------------
   always @(*) begin
-    case (csr_addr_i)
+    case (csr_raddr_i)
       // Machine-mode CSRs
       12'h300: csr_rdata_o = mstatus_q;
       12'h301: csr_rdata_o = 64'h80000000_0014112D; // RV64IMAFDCSU
@@ -192,14 +181,6 @@ module sukuna_csr_unit #(
   end
 
   // --------------------------------------------------------------------------
-  // CSR Write Value Calculation (RW, RS, RC)
-  // --------------------------------------------------------------------------
-  wire [XLEN-1:0] csr_next_val = (csr_op_i == 2'b01) ? csr_wdata_i :
-                                 (csr_op_i == 2'b10) ? (csr_rdata_o | csr_wdata_i) :
-                                 (csr_op_i == 2'b11) ? (csr_rdata_o & ~csr_wdata_i) :
-                                 csr_wdata_i;
-
-  // --------------------------------------------------------------------------
   // Delegation & Trap Destination Determination
   // --------------------------------------------------------------------------
   wire is_interrupt_trap = exception_cause_i[5]; // Bit 5 denotes interrupt
@@ -209,8 +190,20 @@ module sukuna_csr_unit #(
                    (is_interrupt_trap ? mideleg_q[trap_code] : medeleg_q[trap_code]);
 
   assign trap_flush_o   = exception_valid_i || mret_valid_i || sret_valid_i ||
-                          sfence_valid_i    || (csr_req_valid_i && csr_wen_i && (csr_addr_i == 12'h180));
+                          sfence_valid_i    || (csr_commit_wen_i && (csr_commit_addr_i == 12'h180));
   assign sfence_flush_o = sfence_valid_i;
+
+  wire [XLEN-1:0] s_trap_pc = (stvec_q[1:0] == 2'b01 && is_interrupt_trap) ?
+                              ({stvec_q[XLEN-1:2], 2'b00} + {{(XLEN-7){1'b0}}, exception_cause_i[4:0], 2'b00}) :
+                              {stvec_q[XLEN-1:2], 2'b00};
+  wire [XLEN-1:0] m_trap_pc = (mtvec_q[1:0] == 2'b01 && is_interrupt_trap) ?
+                              ({mtvec_q[XLEN-1:2], 2'b00} + {{(XLEN-7){1'b0}}, exception_cause_i[4:0], 2'b00}) :
+                              {mtvec_q[XLEN-1:2], 2'b00};
+
+  assign trap_target_pc_o = exception_valid_i ? (trap_to_s ? s_trap_pc : m_trap_pc) :
+                            mret_valid_i      ? mepc_q :
+                            sret_valid_i      ? sepc_q :
+                            (exception_pc_i + 64'd4);
 
   // --------------------------------------------------------------------------
   // Interrupt Evaluation & Prioritization
@@ -262,7 +255,6 @@ module sukuna_csr_unit #(
 
       ssip_q           <= 1'b0;
       wfi_sleep_o      <= 1'b0;
-      trap_target_pc_o <= {XLEN{1'b0}};
     end else begin
       // WFI sleep management
       if (wfi_valid_i) begin
@@ -282,9 +274,6 @@ module sukuna_csr_unit #(
           mstatus_q[5]     <= mstatus_q[1];      // SPIE <= SIE
           mstatus_q[1]     <= 1'b0;              // SIE <= 0
           priv_mode_o      <= 2'b01;             // To S-mode
-          trap_target_pc_o <= (stvec_q[1:0] == 2'b01 && is_interrupt_trap) ?
-                              ({stvec_q[XLEN-1:2], 2'b00} + (exception_cause_i[4:0] << 2)) :
-                              {stvec_q[XLEN-1:2], 2'b00};
         end else begin
           // M-mode Trap
           mepc_q           <= exception_pc_i;
@@ -294,9 +283,6 @@ module sukuna_csr_unit #(
           mstatus_q[7]     <= mstatus_q[3];      // MPIE <= MIE
           mstatus_q[3]     <= 1'b0;              // MIE <= 0
           priv_mode_o      <= 2'b11;             // To M-mode
-          trap_target_pc_o <= (mtvec_q[1:0] == 2'b01 && is_interrupt_trap) ?
-                              ({mtvec_q[XLEN-1:2], 2'b00} + (exception_cause_i[4:0] << 2)) :
-                              {mtvec_q[XLEN-1:2], 2'b00};
         end
       end
       // 2. MRET Return
@@ -305,7 +291,6 @@ module sukuna_csr_unit #(
         mstatus_q[3]     <= mstatus_q[7];     // MIE <= MPIE
         mstatus_q[7]     <= 1'b1;             // MPIE <= 1
         mstatus_q[12:11] <= 2'b00;            // MPP <= U
-        trap_target_pc_o <= mepc_q;
       end
       // 3. SRET Return
       else if (sret_valid_i && (priv_mode_o >= 2'b01) && !mstatus_q[22]) begin // TSR check
@@ -313,49 +298,48 @@ module sukuna_csr_unit #(
         mstatus_q[1]     <= mstatus_q[5];         // SIE <= SPIE
         mstatus_q[5]     <= 1'b1;                 // SPIE <= 1
         mstatus_q[8]     <= 1'b0;                 // SPP <= U
-        trap_target_pc_o <= sepc_q;
       end
-      // 4. CSR Write / Update
-      else if (csr_req_valid_i && csr_wen_i && !csr_illegal_o) begin
-        case (csr_addr_i)
+      // 4. CSR Write / Commit
+      else if (csr_commit_wen_i) begin
+        case (csr_commit_addr_i)
           12'h300: begin // mstatus
-            mstatus_q[3]     <= csr_next_val[3];     // MIE
-            mstatus_q[7]     <= csr_next_val[7];     // MPIE
-            mstatus_q[8]     <= csr_next_val[8];     // SPP
-            mstatus_q[12:11] <= csr_next_val[12:11]; // MPP
-            mstatus_q[14:13] <= csr_next_val[14:13]; // FS
-            mstatus_q[18]    <= csr_next_val[18];    // SUM
-            mstatus_q[19]    <= csr_next_val[19];    // MXR
-            mstatus_q[20]    <= csr_next_val[20];    // TVM
-            mstatus_q[21]    <= csr_next_val[21];    // TW
-            mstatus_q[22]    <= csr_next_val[22];    // TSR
+            mstatus_q[3]     <= csr_commit_wdata_i[3];     // MIE
+            mstatus_q[7]     <= csr_commit_wdata_i[7];     // MPIE
+            mstatus_q[8]     <= csr_commit_wdata_i[8];     // SPP
+            mstatus_q[12:11] <= csr_commit_wdata_i[12:11]; // MPP
+            mstatus_q[14:13] <= csr_commit_wdata_i[14:13]; // FS
+            mstatus_q[18]    <= csr_commit_wdata_i[18];    // SUM
+            mstatus_q[19]    <= csr_commit_wdata_i[19];    // MXR
+            mstatus_q[20]    <= csr_commit_wdata_i[20];    // TVM
+            mstatus_q[21]    <= csr_commit_wdata_i[21];    // TW
+            mstatus_q[22]    <= csr_commit_wdata_i[22];    // TSR
           end
-          12'h302: medeleg_q  <= csr_next_val[15:0];
-          12'h303: mideleg_q  <= csr_next_val[15:0];
-          12'h304: mie_q      <= csr_next_val[11:0];
-          12'h305: mtvec_q    <= {csr_next_val[XLEN-1:2], csr_next_val[1:0]};
-          12'h340: mscratch_q <= csr_next_val;
-          12'h341: mepc_q     <= {csr_next_val[XLEN-1:2], 2'b00};
-          12'h342: mcause_q   <= csr_next_val;
-          12'h343: mtval_q    <= csr_next_val;
-          12'h344: ssip_q     <= csr_next_val[1]; // S-software interrupt
+          12'h302: medeleg_q  <= csr_commit_wdata_i[15:0];
+          12'h303: mideleg_q  <= csr_commit_wdata_i[15:0];
+          12'h304: mie_q      <= csr_commit_wdata_i[11:0];
+          12'h305: mtvec_q    <= {csr_commit_wdata_i[XLEN-1:2], csr_commit_wdata_i[1:0]};
+          12'h340: mscratch_q <= csr_commit_wdata_i;
+          12'h341: mepc_q     <= {csr_commit_wdata_i[XLEN-1:2], 2'b00};
+          12'h342: mcause_q   <= csr_commit_wdata_i;
+          12'h343: mtval_q    <= csr_commit_wdata_i;
+          12'h344: ssip_q     <= csr_commit_wdata_i[1]; // S-software interrupt
 
           12'h100: begin // sstatus
-            mstatus_q[1]     <= csr_next_val[1];  // SIE
-            mstatus_q[5]     <= csr_next_val[5];  // SPIE
-            mstatus_q[8]     <= csr_next_val[8];  // SPP
-            mstatus_q[14:13] <= csr_next_val[14:13]; // FS
-            mstatus_q[18]    <= csr_next_val[18]; // SUM
-            mstatus_q[19]    <= csr_next_val[19]; // MXR
+            mstatus_q[1]     <= csr_commit_wdata_i[1];  // SIE
+            mstatus_q[5]     <= csr_commit_wdata_i[5];  // SPIE
+            mstatus_q[8]     <= csr_commit_wdata_i[8];  // SPP
+            mstatus_q[14:13] <= csr_commit_wdata_i[14:13]; // FS
+            mstatus_q[18]    <= csr_commit_wdata_i[18]; // SUM
+            mstatus_q[19]    <= csr_commit_wdata_i[19]; // MXR
           end
-          12'h104: mie_q      <= (mie_q & ~mideleg_q[11:0]) | (csr_next_val[11:0] & mideleg_q[11:0]);
-          12'h105: stvec_q    <= {csr_next_val[XLEN-1:2], csr_next_val[1:0]};
-          12'h140: sscratch_q <= csr_next_val;
-          12'h141: sepc_q     <= {csr_next_val[XLEN-1:2], 2'b00};
-          12'h142: scause_q   <= csr_next_val;
-          12'h143: stval_q    <= csr_next_val;
-          12'h144: ssip_q     <= csr_next_val[1];
-          12'h180: satp_o     <= csr_next_val;
+          12'h104: mie_q      <= (mie_q & ~mideleg_q[11:0]) | (csr_commit_wdata_i[11:0] & mideleg_q[11:0]);
+          12'h105: stvec_q    <= {csr_commit_wdata_i[XLEN-1:2], csr_commit_wdata_i[1:0]};
+          12'h140: sscratch_q <= csr_commit_wdata_i;
+          12'h141: sepc_q     <= {csr_commit_wdata_i[XLEN-1:2], 2'b00};
+          12'h142: scause_q   <= csr_commit_wdata_i;
+          12'h143: stval_q    <= csr_commit_wdata_i;
+          12'h144: ssip_q     <= csr_commit_wdata_i[1];
+          12'h180: satp_o     <= csr_commit_wdata_i;
 
           default: ;
         endcase

@@ -71,18 +71,24 @@ module sukuna_l1i_cache #(
   // Pipeline registers for tag comparison stage
   reg                    req_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [3:0]              req_offset_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [INDEX_BITS-1:0]   req_index_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [TAG_WIDTH-1:0]    req_tag_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]  req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  // Per-way valid bit register array (resets to 0)
+  reg [SETS-1:0]         way_valid_q [0:WAYS-1];
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       req_valid_q   <= 1'b0;
       req_offset_q  <= 4'd0;
+      req_index_q   <= {INDEX_BITS{1'b0}};
       req_tag_q     <= {TAG_WIDTH{1'b0}};
       req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
     end else if (!fetch_miss_o) begin
       req_valid_q   <= fetch_req_valid_i;
       req_offset_q  <= req_word_offset;
+      req_index_q   <= req_index;
       req_tag_q     <= req_tag;
       req_paddr_w_q <= fetch_paddr_w_i;
     end
@@ -95,14 +101,19 @@ module sukuna_l1i_cache #(
   wire [CACHE_LINE_BITS-1:0] data_rdata [0:WAYS-1];
   wire [WAYS-1:0]            way_hit;
 
+  localparam WAY_BITS = (WAYS <= 2)  ? 1 :
+                        (WAYS <= 4)  ? 2 :
+                        (WAYS <= 8)  ? 3 :
+                        (WAYS <= 16) ? 4 : 5;
+
   localparam integer MAX_WAY_IDX = WAYS - 1;
-  reg [4:0] victim_ptr_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg       miss_busy_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [WAY_BITS-1:0] victim_ptr_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                miss_busy_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   genvar w;
   generate
     for (w = 0; w < WAYS; w = w + 1) begin : gen_way
-      wire way_wen = refill_resp_valid_i && (victim_ptr_q == w[4:0]);
+      wire way_wen = refill_resp_valid_i && (victim_ptr_q == w[WAY_BITS-1:0]);
 
       // Tag Array (Stores 1-bit valid + TAG_WIDTH bits tag)
       sk_ram_bram #(
@@ -143,7 +154,7 @@ module sukuna_l1i_cache #(
       );
 
       // Hit comparison for way w
-      assign way_hit[w] = req_valid_q && tag_rdata[w][TAG_WIDTH] &&
+      assign way_hit[w] = req_valid_q && way_valid_q[w][req_index_q] &&
                           (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
     end
   endgenerate
@@ -162,35 +173,49 @@ module sukuna_l1i_cache #(
     end
   end
 
-  // Extract 64-bit instruction block (inst0, inst1) based on word offset [5:2]
-  wire [63:0] line_words [0:7];
+  wire [CACHE_LINE_BITS-1:0] eff_line_data = refill_resp_valid_i ? refill_line_data_i : hit_line_data;
+
+  // Extract 64-bit instruction block (inst0, inst1) based on 32-bit word offset [5:2]
+  wire [31:0] line_words32 [0:15];
   genvar wi;
   generate
-    for (wi = 0; wi < 8; wi = wi + 1) begin : gen_words
-      assign line_words[wi] = hit_line_data[wi*64 +: 64];
+    for (wi = 0; wi < 16; wi = wi + 1) begin : gen_words32
+      assign line_words32[wi] = eff_line_data[wi*32 +: 32];
     end
   endgenerate
 
-  assign fetch_inst_o       = line_words[req_offset_q[3:1]];
-  assign fetch_resp_valid_o = hit && !miss_busy_q;
-  assign fetch_miss_o       = req_valid_q && !hit;
+  wire [31:0] fetch_word0 = line_words32[req_offset_q];
+  wire [31:0] fetch_word1 = (req_offset_q == 4'd15) ? 32'h00000013 : line_words32[req_offset_q + 4'd1];
+
+  assign fetch_inst_o       = {fetch_word1, fetch_word0};
+  assign fetch_resp_valid_o = (hit && !miss_busy_q) || refill_resp_valid_i;
+  assign fetch_miss_o       = ((req_valid_q && !hit) || miss_busy_q) && !refill_resp_valid_i;
 
   // --------------------------------------------------------------------------
   // Refill State Control & Replacement
   // --------------------------------------------------------------------------
-  assign refill_req_valid_o    = fetch_miss_o && !miss_busy_q;
+  assign refill_req_valid_o    = req_valid_q && !hit && !miss_busy_q;
   assign refill_line_paddr_w_o = {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000}; // Line aligned
 
+  integer wy;
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       miss_busy_q  <= 1'b0;
-      victim_ptr_q <= 5'd0;
+      victim_ptr_q <= {WAY_BITS{1'b0}};
+      for (wy = 0; wy < WAYS; wy = wy + 1) begin
+        way_valid_q[wy] <= {SETS{1'b0}};
+      end
     end else begin
-      if (refill_req_valid_o) begin
+      if (fence_i_flush_i) begin
+        for (wy = 0; wy < WAYS; wy = wy + 1) begin
+          way_valid_q[wy] <= {SETS{1'b0}};
+        end
+      end else if (refill_req_valid_o) begin
         miss_busy_q <= 1'b1;
       end else if (refill_resp_valid_i) begin
-        miss_busy_q  <= 1'b0;
-        victim_ptr_q <= (victim_ptr_q == MAX_WAY_IDX[4:0]) ? 5'd0 : victim_ptr_q + 5'd1;
+        miss_busy_q                       <= 1'b0;
+        way_valid_q[victim_ptr_q][req_index_q] <= 1'b1;
+        victim_ptr_q                      <= (victim_ptr_q == MAX_WAY_IDX[WAY_BITS-1:0]) ? {WAY_BITS{1'b0}} : victim_ptr_q + 1'b1;
       end
     end
   end

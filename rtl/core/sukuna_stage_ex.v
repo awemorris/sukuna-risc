@@ -6,9 +6,11 @@
 //   - Receives dual-lane buses (Lane 0: older, Lane 1: younger)
 //   - Routes to INT-EU and MA-EU based on 1-bit enable bits (int_en_l0/l1, ma_en_l0/l1)
 //   - Instantiates dedicated INT-EU (1/multi-cycle with sk_mul) and MA-EU (2-cycle)
-//   - Generates unified branch condition evaluation and target address calculation
+//   - Full Branch condition evaluation (BEQ/BNE/BLT/BGE/BLTU/BGEU) and JAL/JALR
+//   - Branch mispredict & Jump redirection to IF1 and Hazard Unit
+//   - Evaluates CSR and Privileged instructions on Lane 0 (single-issue)
 //   - Emits ex_stall_o to Hazard Unit on memory stalls or multicycle ALU execution
-//   - Routes results to Lane 0 and Lane 1 for WB stage
+//   - Routes results and exception/privileged states to Lane 0 and Lane 1 for WB
 // ============================================================================
 
 `include "sukuna_defines.vh"
@@ -35,6 +37,15 @@ module sukuna_stage_ex #(
   input  wire [XLEN-1:0]        l0_imm_i,
   input  wire [3:0]             l0_alu_op_i,
   input  wire [2:0]             l0_mem_op_i,
+  input  wire [2:0]             l0_sys_op_i,
+  input  wire [2:0]             l0_priv_op_i,
+  input  wire [11:0]            l0_csr_addr_i,
+  input  wire                   l0_csr_is_imm_i,
+  input  wire [2:0]             l0_br_type_i,
+  input  wire [1:0]             l0_jump_type_i,
+  input  wire                   l0_is_word_i,
+  input  wire                   l0_use_imm_i,
+  input  wire                   l0_use_pc_i,
 
   // Lane 1 Bus from ID3 (younger)
   input  wire                   l1_valid_i,
@@ -45,12 +56,36 @@ module sukuna_stage_ex #(
   input  wire [XLEN-1:0]        l1_imm_i,
   input  wire [3:0]             l1_alu_op_i,
   input  wire [2:0]             l1_mem_op_i,
+  input  wire                   l1_is_word_i,
+  input  wire                   l1_use_imm_i,
+
+  // Source register numbers for operand forwarding
+  input  wire [4:0]             l0_rs1_i,
+  input  wire [4:0]             l0_rs2_i,
+  input  wire [4:0]             l1_rs1_i,
+  input  wire [4:0]             l1_rs2_i,
+
+  // Forwarding from WB stage commit
+  input  wire                   wb_l0_wen_i,
+  input  wire [4:0]             wb_l0_rd_i,
+  input  wire [XLEN-1:0]        wb_l0_data_i,
+  input  wire                   wb_l1_wen_i,
+  input  wire [4:0]             wb_l1_rd_i,
+  input  wire [XLEN-1:0]        wb_l1_data_i,
 
   // Enable Bits
   input  wire                   int_en_l0_i,
   input  wire                   int_en_l1_i,
   input  wire                   ma_en_l0_i,
   input  wire                   ma_en_l1_i,
+
+  // CSR Unit Read / Legality Interface (Lane 0 EX stage)
+  output wire                   csr_req_valid_o,
+  output wire [11:0]            csr_raddr_o,
+  output wire                   csr_rwen_o,
+  input  wire [XLEN-1:0]        csr_rdata_i,
+  input  wire                   csr_illegal_i,
+  input  wire [1:0]             priv_mode_i,
 
   // Branch / Mispredict Redirection to IF1 & Hazard Unit
   output wire                   branch_mispredict_o,
@@ -78,26 +113,129 @@ module sukuna_stage_ex #(
   input  wire [XLEN-1:0]        l1d_rdata_i,
   input  wire                   l1d_miss_stall_i,
 
-  // Output to WB Stage
+  // Output to WB Stage: Lane 0
   output wire                   ex_wb_l0_valid_o,
+  output wire [XLEN-1:0]        ex_wb_l0_pc_o,
   output wire [4:0]             ex_wb_l0_rd_o,
   output wire [XLEN-1:0]        ex_wb_l0_data_o,
   output wire                   ex_wb_l0_exc_o,
+  output wire [5:0]             ex_wb_l0_cause_o,
+  output wire [XLEN-1:0]        ex_wb_l0_tval_o,
+  output wire                   ex_wb_l0_csr_wen_o,
+  output wire [11:0]            ex_wb_l0_csr_addr_o,
+  output wire [XLEN-1:0]        ex_wb_l0_csr_wdata_o,
+  output wire                   ex_wb_l0_mret_o,
+  output wire                   ex_wb_l0_sret_o,
+  output wire                   ex_wb_l0_wfi_o,
+  output wire                   ex_wb_l0_sfence_o,
 
+  // Output to WB Stage: Lane 1
   output wire                   ex_wb_l1_valid_o,
+  output wire [XLEN-1:0]        ex_wb_l1_pc_o,
   output wire [4:0]             ex_wb_l1_rd_o,
   output wire [XLEN-1:0]        ex_wb_l1_data_o,
-  output wire                   ex_wb_l1_exc_o
+  output wire                   ex_wb_l1_exc_o,
+  output wire [5:0]             ex_wb_l1_cause_o,
+  output wire [XLEN-1:0]        ex_wb_l1_tval_o
 );
 
   // --------------------------------------------------------------------------
-  // INT-EU Selection
+  // Operand Forwarding / Bypass Network
+  // Prioritizes: EX/WB (1 cycle ahead) -> WB commit (2 cycles ahead) -> Register file data
   // --------------------------------------------------------------------------
-  wire int_valid = (int_en_l0_i && l0_valid_i) || (int_en_l1_i && l1_valid_i);
-  wire [3:0]      int_alu_op = int_en_l0_i ? l0_alu_op_i : l1_alu_op_i;
-  wire [XLEN-1:0] int_src1   = int_en_l0_i ? l0_src1_i   : l1_src1_i;
-  wire [XLEN-1:0] int_src2   = int_en_l0_i ? l0_src2_i   : l1_src2_i;
-  wire [4:0]      int_rd     = int_en_l0_i ? l0_rd_i     : l1_rd_i;
+  wire [XLEN-1:0] fwd_l0_src1 = (ex_wb_l0_valid_o && (ex_wb_l0_rd_o != 5'd0) && (ex_wb_l0_rd_o == l0_rs1_i)) ? ex_wb_l0_data_o :
+                                (ex_wb_l1_valid_o && (ex_wb_l1_rd_o != 5'd0) && (ex_wb_l1_rd_o == l0_rs1_i)) ? ex_wb_l1_data_o :
+                                (wb_l0_wen_i && (wb_l0_rd_i != 5'd0) && (wb_l0_rd_i == l0_rs1_i))             ? wb_l0_data_i   :
+                                (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l0_rs1_i))             ? wb_l1_data_i   :
+                                l0_src1_i;
+
+  wire [XLEN-1:0] fwd_l0_src2 = (ex_wb_l0_valid_o && (ex_wb_l0_rd_o != 5'd0) && (ex_wb_l0_rd_o == l0_rs2_i)) ? ex_wb_l0_data_o :
+                                (ex_wb_l1_valid_o && (ex_wb_l1_rd_o != 5'd0) && (ex_wb_l1_rd_o == l0_rs2_i)) ? ex_wb_l1_data_o :
+                                (wb_l0_wen_i && (wb_l0_rd_i != 5'd0) && (wb_l0_rd_i == l0_rs2_i))             ? wb_l0_data_i   :
+                                (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l0_rs2_i))             ? wb_l1_data_i   :
+                                l0_src2_i;
+
+  wire [XLEN-1:0] fwd_l1_src1 = (ex_wb_l0_valid_o && (ex_wb_l0_rd_o != 5'd0) && (ex_wb_l0_rd_o == l1_rs1_i)) ? ex_wb_l0_data_o :
+                                (ex_wb_l1_valid_o && (ex_wb_l1_rd_o != 5'd0) && (ex_wb_l1_rd_o == l1_rs1_i)) ? ex_wb_l1_data_o :
+                                (wb_l0_wen_i && (wb_l0_rd_i != 5'd0) && (wb_l0_rd_i == l1_rs1_i))             ? wb_l0_data_i   :
+                                (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l1_rs1_i))             ? wb_l1_data_i   :
+                                l1_src1_i;
+
+  wire [XLEN-1:0] fwd_l1_src2 = (ex_wb_l0_valid_o && (ex_wb_l0_rd_o != 5'd0) && (ex_wb_l0_rd_o == l1_rs2_i)) ? ex_wb_l0_data_o :
+                                (ex_wb_l1_valid_o && (ex_wb_l1_rd_o != 5'd0) && (ex_wb_l1_rd_o == l1_rs2_i)) ? ex_wb_l1_data_o :
+                                (wb_l0_wen_i && (wb_l0_rd_i != 5'd0) && (wb_l0_rd_i == l1_rs2_i))             ? wb_l0_data_i   :
+                                (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l1_rs2_i))             ? wb_l1_data_i   :
+                                l1_src2_i;
+
+  // --------------------------------------------------------------------------
+  // CSR & Privileged Instruction Evaluation (Lane 0 only)
+  // --------------------------------------------------------------------------
+  wire is_csr_op  = l0_valid_i && (l0_sys_op_i == `SYS_CSRRW || l0_sys_op_i == `SYS_CSRRS || l0_sys_op_i == `SYS_CSRRC);
+  wire is_priv_op = l0_valid_i && (l0_sys_op_i == `SYS_PRIV);
+
+  wire csr_w_is_zero = l0_csr_is_imm_i ? (l0_imm_i[4:0] == 5'd0) : (fwd_l0_src1 == {XLEN{1'b0}});
+  wire csr_intends_write = (l0_sys_op_i == `SYS_CSRRW) || !csr_w_is_zero;
+
+  assign csr_req_valid_o = is_csr_op && !stall_i && !flush_i;
+  assign csr_raddr_o     = l0_csr_addr_i;
+  assign csr_rwen_o      = csr_intends_write;
+
+  // CSR Write Data Calculation (RW, RS, RC)
+  wire [XLEN-1:0] csr_in_wdata = l0_csr_is_imm_i ? {{(XLEN-5){1'b0}}, l0_imm_i[4:0]} : fwd_l0_src1;
+  wire [XLEN-1:0] csr_calc_wdata = (l0_sys_op_i == `SYS_CSRRW) ? csr_in_wdata :
+                                   (l0_sys_op_i == `SYS_CSRRS) ? (csr_rdata_i | csr_in_wdata) :
+                                   (l0_sys_op_i == `SYS_CSRRC) ? (csr_rdata_i & ~csr_in_wdata) :
+                                   csr_in_wdata;
+
+  // Privileged Op Decodes
+  wire is_ecall   = is_priv_op && (l0_priv_op_i == `PRIV_ECALL);
+  wire is_ebreak  = is_priv_op && (l0_priv_op_i == `PRIV_EBREAK);
+  wire is_mret    = is_priv_op && (l0_priv_op_i == `PRIV_MRET);
+  wire is_sret    = is_priv_op && (l0_priv_op_i == `PRIV_SRET);
+  wire is_wfi     = is_priv_op && (l0_priv_op_i == `PRIV_WFI);
+  wire is_sfence  = is_priv_op && (l0_priv_op_i == `PRIV_SFENCE_VMA);
+
+  wire illegal_mret = is_mret && (priv_mode_i < 2'b11);
+  wire illegal_sret = is_sret && (priv_mode_i < 2'b01);
+  wire illegal_priv = illegal_mret || illegal_sret;
+  wire csr_illegal  = is_csr_op && csr_illegal_i;
+
+  wire [5:0] priv_cause = is_ecall ? ((priv_mode_i == 2'b11) ? `EXC_ECALL_M :
+                                      (priv_mode_i == 2'b01) ? `EXC_ECALL_S : `EXC_ECALL_U) :
+                          is_ebreak ? `EXC_BREAKPOINT :
+                          (illegal_priv || csr_illegal) ? `EXC_ILLEGAL_INST : 6'd0;
+
+  wire priv_has_exc = is_ecall || is_ebreak || illegal_priv || csr_illegal;
+
+  // --------------------------------------------------------------------------
+  // Control Flow: Branch Condition & Jump Evaluation
+  // --------------------------------------------------------------------------
+  wire is_branch0 = l0_valid_i && (l0_br_type_i != `BR_NONE);
+  wire is_jump0   = l0_valid_i && (l0_jump_type_i != `JUMP_NONE);
+
+  // --------------------------------------------------------------------------
+  // INT-EU Operand Routing
+  // --------------------------------------------------------------------------
+  wire int_valid = (int_en_l0_i && l0_valid_i && !is_csr_op && !is_priv_op) ||
+                   (int_en_l1_i && l1_valid_i);
+
+  // Operand 1 selection
+  wire [XLEN-1:0] int_src1_l0 = (is_jump0)   ? l0_pc_i :
+                                (l0_use_pc_i) ? l0_pc_i : fwd_l0_src1;
+  wire [XLEN-1:0] int_src1_l1 = fwd_l1_src1;
+
+  // Operand 2 selection
+  wire [XLEN-1:0] int_src2_l0 = (is_jump0)     ? 64'd4 :
+                                (is_branch0)   ? fwd_l0_src2 :
+                                (l0_use_imm_i) ? l0_imm_i    : fwd_l0_src2;
+  wire [XLEN-1:0] int_src2_l1 = l1_use_imm_i ? l1_imm_i    : fwd_l1_src2;
+
+  wire [XLEN-1:0] int_src1    = int_en_l0_i ? int_src1_l0 : int_src1_l1;
+  wire [XLEN-1:0] int_src2    = int_en_l0_i ? int_src2_l0 : int_src2_l1;
+  wire [3:0]      int_alu_op  = int_en_l0_i ? (is_branch0 ? `ALU_SUB : is_jump0 ? `ALU_ADD : l0_alu_op_i) :
+                                              l1_alu_op_i;
+  wire [4:0]      int_rd      = int_en_l0_i ? (is_branch0 ? 5'd0 : l0_rd_i) : l1_rd_i;
+  wire            int_is_word = int_en_l0_i ? (is_jump0 ? 1'b0 : l0_is_word_i) : l1_is_word_i;
 
   wire int_busy;
   wire int_out_valid;
@@ -113,8 +251,9 @@ module sukuna_stage_ex #(
   ) u_int_eu (
     .clk_i    (clk_i),
     .rst_ni   (rst_ni),
-    .valid_i  (int_valid && !stall_i),
+    .valid_i  (int_valid && !stall_i && !flush_i && !branch_mispredict_o),
     .alu_op_i (int_alu_op),
+    .is_word_i(int_is_word),
     .src1_i   (int_src1),
     .src2_i   (int_src2),
     .rd_i     (int_rd),
@@ -127,11 +266,23 @@ module sukuna_stage_ex #(
     .cmp_ltu_o(cmp_ltu)
   );
 
-  // --------------------------------------------------------------------------
-  // Branch Calculation & Target Generation (Shared Adder)
-  // --------------------------------------------------------------------------
-  wire [XLEN-1:0] branch_base_pc = int_en_l0_i ? l0_pc_i : l1_pc_i;
-  wire [XLEN-1:0] branch_imm     = int_en_l0_i ? l0_imm_i : l1_imm_i;
+  // Branch condition evaluation
+  reg branch_cond_met;
+  always @(*) begin
+    case (l0_br_type_i)
+      `BR_BEQ:  branch_cond_met = cmp_eq;
+      `BR_BNE:  branch_cond_met = !cmp_eq;
+      `BR_BLT:  branch_cond_met = cmp_lt;
+      `BR_BGE:  branch_cond_met = !cmp_lt;
+      `BR_BLTU: branch_cond_met = cmp_ltu;
+      `BR_BGEU: branch_cond_met = !cmp_ltu;
+      default:  branch_cond_met = 1'b0;
+    endcase
+  end
+
+  // Branch / Jump Redirection Target Generation (Shared Adder)
+  wire [XLEN-1:0] branch_base = (l0_jump_type_i == `JUMP_JALR) ? fwd_l0_src1 : l0_pc_i;
+  wire [XLEN-1:0] branch_imm  = l0_imm_i;
   wire [XLEN-1:0] calc_target_pc;
 
   sk_add #(
@@ -142,14 +293,22 @@ module sukuna_stage_ex #(
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
     .cin_i   (1'b0),
-    .a_i     (branch_base_pc),
+    .a_i     (branch_base),
     .b_i     (branch_imm),
     .sum_o   (calc_target_pc),
     .cout_o  ()
   );
 
-  assign branch_target_o     = calc_target_pc;
-  assign branch_mispredict_o = 1'b0; // Default off until branch prediction integration
+  wire redirect_active = l0_valid_i && !stall_i && (is_jump0 || (is_branch0 && branch_cond_met));
+  assign branch_mispredict_o = redirect_active;
+  assign branch_target_o     = (l0_jump_type_i == `JUMP_JALR) ? {calc_target_pc[XLEN-1:1], 1'b0} : calc_target_pc;
+
+  always @(posedge clk_i) begin
+    if (redirect_active) begin
+      $display("[EX BRANCH] time=%0t pc=0x%h cond_met=%b target=0x%h cmp_eq=%b src1=0x%h src2=0x%h",
+               $time, l0_pc_i, branch_cond_met, branch_target_o, cmp_eq, int_src1, int_src2);
+    end
+  end
 
   // --------------------------------------------------------------------------
   // MA-EU Selection
@@ -157,9 +316,9 @@ module sukuna_stage_ex #(
   wire ma_valid = (ma_en_l0_i && l0_valid_i) || (ma_en_l1_i && l1_valid_i);
   wire [2:0]      ma_op     = ma_en_l0_i ? l0_mem_op_i : l1_mem_op_i;
   wire [4:0]      ma_rd     = ma_en_l0_i ? l0_rd_i     : l1_rd_i;
-  wire [XLEN-1:0] ma_base   = ma_en_l0_i ? l0_src1_i   : l1_src1_i;
+  wire [XLEN-1:0] ma_base   = ma_en_l0_i ? fwd_l0_src1 : fwd_l1_src1;
   wire [XLEN-1:0] ma_offset = ma_en_l0_i ? l0_imm_i    : l1_imm_i;
-  wire [XLEN-1:0] ma_wdata  = ma_en_l0_i ? l0_src2_i   : l1_src2_i;
+  wire [XLEN-1:0] ma_wdata  = ma_en_l0_i ? fwd_l0_src2 : fwd_l1_src2;
 
   wire ma_busy;
   wire ma_out_valid;
@@ -173,7 +332,7 @@ module sukuna_stage_ex #(
   ) u_agu_eu (
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
-    .req_valid_i        (ma_valid && !stall_i),
+    .req_valid_i        (ma_valid && !stall_i && !flush_i && !branch_mispredict_o),
     .req_op_i           (ma_op),
     .req_rd_i           (ma_rd),
     .req_base_i         (ma_base),
@@ -203,29 +362,127 @@ module sukuna_stage_ex #(
   // Stall backpressure to Hazard Unit (Pattern 1 + Multi-cycle INT)
   assign ex_stall_o = ma_busy || int_busy;
 
-  // Track which EU served which Lane
-  reg int_was_l0_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg ma_was_l0_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  // --------------------------------------------------------------------------
+  // Pipeline Registers to WB Stage
+  // --------------------------------------------------------------------------
+  reg              ex_l0_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              ex_l1_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              int_was_l0_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              ma_was_l0_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_was_l0_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_valid_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [4:0]        sys_rd_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   sys_rdata_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_exc_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [5:0]        sys_cause_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_csr_wen_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [11:0]       sys_csr_addr_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   sys_csr_wdata_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_mret_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_sret_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_wfi_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_sfence_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  reg [XLEN-1:0]   l0_pc_q;         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   l1_pc_q;         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   l0_tval_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   l1_tval_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      int_was_l0_q <= 1'b0;
-      ma_was_l0_q  <= 1'b0;
-    end else if (!stall_i) begin
-      int_was_l0_q <= int_en_l0_i;
-      ma_was_l0_q  <= ma_en_l0_i;
+      ex_l0_valid_q   <= 1'b0;
+      ex_l1_valid_q   <= 1'b0;
+      int_was_l0_q    <= 1'b0;
+      ma_was_l0_q     <= 1'b0;
+      sys_was_l0_q    <= 1'b0;
+      sys_valid_q     <= 1'b0;
+      sys_rd_q        <= 5'd0;
+      sys_rdata_q     <= {XLEN{1'b0}};
+      sys_exc_q       <= 1'b0;
+      sys_cause_q     <= 6'd0;
+      sys_csr_wen_q   <= 1'b0;
+      sys_csr_addr_q  <= 12'd0;
+      sys_csr_wdata_q <= {XLEN{1'b0}};
+      sys_mret_q      <= 1'b0;
+      sys_sret_q      <= 1'b0;
+      sys_wfi_q       <= 1'b0;
+      sys_sfence_q    <= 1'b0;
+      l0_pc_q         <= {XLEN{1'b0}};
+      l1_pc_q         <= {XLEN{1'b0}};
+      l0_tval_q       <= {XLEN{1'b0}};
+      l1_tval_q       <= {XLEN{1'b0}};
+    end else begin
+      if (flush_i) begin
+        ex_l0_valid_q   <= 1'b0;
+        ex_l1_valid_q   <= 1'b0;
+        int_was_l0_q    <= 1'b0;
+        ma_was_l0_q     <= 1'b0;
+        sys_was_l0_q    <= 1'b0;
+        sys_valid_q     <= 1'b0;
+        sys_exc_q       <= 1'b0;
+        sys_csr_wen_q   <= 1'b0;
+        sys_mret_q      <= 1'b0;
+        sys_sret_q      <= 1'b0;
+        sys_wfi_q       <= 1'b0;
+        sys_sfence_q    <= 1'b0;
+      end else if (!stall_i) begin
+        ex_l0_valid_q   <= l0_valid_i && !branch_mispredict_o;
+        ex_l1_valid_q   <= l1_valid_i && !branch_mispredict_o;
+        int_was_l0_q    <= int_en_l0_i && !is_csr_op && !is_priv_op;
+        ma_was_l0_q     <= ma_en_l0_i;
+        sys_was_l0_q    <= is_csr_op || is_priv_op;
+        sys_valid_q     <= l0_valid_i && (is_csr_op || is_priv_op);
+        sys_rd_q        <= l0_rd_i;
+        sys_rdata_q     <= csr_rdata_i;
+        sys_exc_q       <= priv_has_exc;
+        sys_cause_q     <= priv_cause;
+        sys_csr_wen_q   <= is_csr_op && csr_intends_write && !priv_has_exc;
+        sys_csr_addr_q  <= l0_csr_addr_i;
+        sys_csr_wdata_q <= csr_calc_wdata;
+        sys_mret_q      <= is_mret && !illegal_mret;
+        sys_sret_q      <= is_sret && !illegal_sret;
+        sys_wfi_q       <= is_wfi;
+        sys_sfence_q    <= is_sfence;
+        l0_pc_q         <= l0_pc_i;
+        l1_pc_q         <= l1_pc_i;
+        l0_tval_q       <= l0_pc_i;
+        l1_tval_q       <= l1_pc_i;
+      end
     end
   end
 
-  // Route results back to Lane 0 and Lane 1
-  assign ex_wb_l0_valid_o = int_was_l0_q ? int_out_valid : ma_out_valid;
-  assign ex_wb_l0_rd_o    = int_was_l0_q ? int_out_rd    : ma_out_rd;
-  assign ex_wb_l0_data_o  = int_was_l0_q ? int_out_result: ma_out_rdata;
-  assign ex_wb_l0_exc_o   = (!int_was_l0_q && dtlb_fault_i); // Page Fault on Lane 0 MA
+  // --------------------------------------------------------------------------
+  // Output Routing to WB Stage
+  // --------------------------------------------------------------------------
+  assign ex_wb_l0_valid_o     = ex_l0_valid_q && (sys_was_l0_q ? sys_valid_q :
+                                int_was_l0_q ? int_out_valid : ma_out_valid);
+  assign ex_wb_l0_pc_o        = l0_pc_q;
+  assign ex_wb_l0_rd_o        = sys_was_l0_q ? sys_rd_q :
+                                int_was_l0_q ? int_out_rd : ma_out_rd;
+  assign ex_wb_l0_data_o      = sys_was_l0_q ? sys_rdata_q :
+                                int_was_l0_q ? int_out_result : ma_out_rdata;
+  assign ex_wb_l0_exc_o       = sys_was_l0_q ? sys_exc_q :
+                                (!int_was_l0_q && dtlb_fault_i);
+  assign ex_wb_l0_cause_o     = sys_was_l0_q ? sys_cause_q : `EXC_LOAD_PAGE_FAULT;
+  assign ex_wb_l0_tval_o      = sys_was_l0_q ? l0_tval_q : ma_base;
 
-  assign ex_wb_l1_valid_o = (!int_was_l0_q) ? int_out_valid : ma_out_valid;
-  assign ex_wb_l1_rd_o    = (!int_was_l0_q) ? int_out_rd    : ma_out_rd;
-  assign ex_wb_l1_data_o  = (!int_was_l0_q) ? int_out_result: ma_out_rdata;
-  assign ex_wb_l1_exc_o   = (int_was_l0_q && dtlb_fault_i);
+  assign ex_wb_l0_csr_wen_o   = sys_was_l0_q && sys_csr_wen_q;
+  assign ex_wb_l0_csr_addr_o  = sys_csr_addr_q;
+  assign ex_wb_l0_csr_wdata_o = sys_csr_wdata_q;
+  assign ex_wb_l0_mret_o      = sys_was_l0_q && sys_mret_q;
+  assign ex_wb_l0_sret_o      = sys_was_l0_q && sys_sret_q;
+  assign ex_wb_l0_wfi_o       = sys_was_l0_q && sys_wfi_q;
+  assign ex_wb_l0_sfence_o    = sys_was_l0_q && sys_sfence_q;
+
+  assign ex_wb_l1_valid_o     = ex_l1_valid_q && ((!int_was_l0_q) ? int_out_valid : ma_out_valid);
+  assign ex_wb_l1_pc_o        = l1_pc_q;
+  assign ex_wb_l1_rd_o        = (!int_was_l0_q) ? int_out_rd : ma_out_rd;
+  assign ex_wb_l1_data_o      = (!int_was_l0_q) ? int_out_result : ma_out_rdata;
+  assign ex_wb_l1_exc_o       = (int_was_l0_q && dtlb_fault_i);
+  assign ex_wb_l1_cause_o     = `EXC_LOAD_PAGE_FAULT;
+  assign ex_wb_l1_tval_o      = l1_tval_q;
+
+  // Avoid unused variable warnings
+  wire _unused = ma_was_l0_q;
 
 endmodule

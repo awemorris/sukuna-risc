@@ -4,10 +4,11 @@
 // ============================================================================
 // Features:
 //   - Resource sharing:
-//     * Single sk_addsub for ADD, SUB, SLT, SLTU, comparisons
-//     * Single sk_shift for SLL, SRL, SRA
-//     * Single sk_mul (parameterizable LAT) for all MUL instructions (NO bare *)
+//     * Single sk_addsub for ADD, SUB, SLT, SLTU, Branch Compares
+//     * Single sk_shift for SLL, SRL, SRA (both 64-bit and 32-bit Word shifts)
+//     * Single sk_mul (parameterizable LAT) for all MUL instructions
 //     * Single sk_div for DIV, REM
+//   - 32-bit Word operations (RV64I OP-32/OP-IMM-32): 64-bit sign-extension
 //   - Multi-cycle busy generation for Hazard Unit backpressure (stall_o)
 // ============================================================================
 
@@ -22,6 +23,7 @@ module sukuna_int_eu #(
 
   input  wire            valid_i,
   input  wire [3:0]      alu_op_i,
+  input  wire            is_word_i,
   input  wire [XLEN-1:0] src1_i,
   input  wire [XLEN-1:0] src2_i,
   input  wire [4:0]      rd_i,
@@ -81,6 +83,9 @@ module sukuna_int_eu #(
   // --------------------------------------------------------------------------
   wire [1:0] shift_mode = (alu_op_i == `ALU_SLL) ? 2'b00 :
                           (alu_op_i == `ALU_SRL) ? 2'b01 : 2'b10;
+
+  wire [5:0] effective_shamt = is_word_i ? {1'b0, src2_i[4:0]} : src2_i[5:0];
+  wire [XLEN-1:0] shift_operand = is_word_i ? {{32{src1_i[31]}}, src1_i[31:0]} : src1_i;
   wire [XLEN-1:0] shift_res;
 
   sk_shift #(
@@ -91,8 +96,8 @@ module sukuna_int_eu #(
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
     .op_i    (shift_mode),
-    .data_i  (src1_i),
-    .shamt_i (src2_i[5:0]),
+    .data_i  (shift_operand),
+    .shamt_i (effective_shamt),
     .result_o(shift_res)
   );
 
@@ -103,8 +108,8 @@ module sukuna_int_eu #(
   wire [129:0] mul_full_prod;
 
   // Sign extension to 65 bits for signed multiplication
-  wire [64:0] mul_a = {src1_i[XLEN-1], src1_i};
-  wire [64:0] mul_b = {src2_i[XLEN-1], src2_i};
+  wire [64:0] mul_a = is_word_i ? {{33{src1_i[31]}}, src1_i[31:0]} : {src1_i[XLEN-1], src1_i};
+  wire [64:0] mul_b = is_word_i ? {{33{src2_i[31]}}, src2_i[31:0]} : {src2_i[XLEN-1], src2_i};
 
   sk_mul #(
     .AW    (65),
@@ -124,17 +129,22 @@ module sukuna_int_eu #(
   reg [MUL_LAT:0] mul_pipe_vld_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0]       mul_rd_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg             mul_busy_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg             mul_word_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mul_pipe_vld_q <= {(MUL_LAT+1){1'b0}};
       mul_rd_q       <= 5'd0;
       mul_busy_q     <= 1'b0;
+      mul_word_q     <= 1'b0;
     end else begin
       mul_pipe_vld_q <= {mul_pipe_vld_q[MUL_LAT-1:0], (valid_i && is_mul)};
-      if (valid_i && is_mul && (MUL_LAT > 1)) begin
-        mul_rd_q   <= rd_i;
-        mul_busy_q <= 1'b1;
+      if (valid_i && is_mul) begin
+        mul_word_q <= is_word_i;
+        if (MUL_LAT > 1) begin
+          mul_rd_q   <= rd_i;
+          mul_busy_q <= 1'b1;
+        end
       end else if (mul_pipe_vld_q[MUL_LAT-1]) begin
         mul_busy_q <= 1'b0;
       end
@@ -150,9 +160,13 @@ module sukuna_int_eu #(
   wire div_done;
   wire [XLEN-1:0] div_quotient;
   wire [XLEN-1:0] div_remainder;
-  reg  div_busy_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg  div_is_rem_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg  div_busy_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg  div_is_rem_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg  div_word_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0] div_rd_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  wire [XLEN-1:0] div_src1 = is_word_i ? {{32{src1_i[31]}}, src1_i[31:0]} : src1_i;
+  wire [XLEN-1:0] div_src2 = is_word_i ? {{32{src2_i[31]}}, src2_i[31:0]} : src2_i;
 
   sk_div #(
     .WIDTH(XLEN),
@@ -162,8 +176,8 @@ module sukuna_int_eu #(
     .rst_ni       (rst_ni),
     .start_i      (div_start),
     .signed_mode_i(1'b1),
-    .dividend_i   (src1_i),
-    .divisor_i    (src2_i),
+    .dividend_i   (div_src1),
+    .divisor_i    (div_src2),
     .ready_o      (div_ready),
     .done_o       (div_done),
     .quotient_o   (div_quotient),
@@ -175,11 +189,13 @@ module sukuna_int_eu #(
     if (!rst_ni) begin
       div_busy_q   <= 1'b0;
       div_is_rem_q <= 1'b0;
+      div_word_q   <= 1'b0;
       div_rd_q     <= 5'd0;
     end else begin
       if (div_start) begin
         div_busy_q   <= 1'b1;
         div_is_rem_q <= (alu_op_i == `ALU_REM);
+        div_word_q   <= is_word_i;
         div_rd_q     <= rd_i;
       end else if (div_done) begin
         div_busy_q   <= 1'b0;
@@ -197,6 +213,28 @@ module sukuna_int_eu #(
   wire [XLEN-1:0] logic_or  = src1_i | src2_i;
   wire [XLEN-1:0] logic_xor = src1_i ^ src2_i;
 
+  reg [XLEN-1:0] alu_raw_res;
+  always @(*) begin
+    case (alu_op_i)
+      `ALU_ADD:  alu_raw_res = addsub_res;
+      `ALU_SUB:  alu_raw_res = addsub_res;
+      `ALU_SLL:  alu_raw_res = shift_res;
+      `ALU_SLT:  alu_raw_res = {{(XLEN-1){1'b0}}, slt_val};
+      `ALU_SLTU: alu_raw_res = {{(XLEN-1){1'b0}}, sltu_val};
+      `ALU_XOR:  alu_raw_res = logic_xor;
+      `ALU_SRL:  alu_raw_res = shift_res;
+      `ALU_SRA:  alu_raw_res = shift_res;
+      `ALU_OR:   alu_raw_res = logic_or;
+      `ALU_AND:  alu_raw_res = logic_and;
+      default:   alu_raw_res = addsub_res;
+    endcase
+  end
+
+  wire [XLEN-1:0] final_alu_res = is_word_i ? {{32{alu_raw_res[31]}}, alu_raw_res[31:0]} : alu_raw_res;
+  wire [XLEN-1:0] div_res_raw   = div_is_rem_q ? div_remainder : div_quotient;
+  wire [XLEN-1:0] div_final_res = div_word_q ? {{32{div_res_raw[31]}}, div_res_raw[31:0]} : div_res_raw;
+  wire [XLEN-1:0] mul_final_res = mul_word_q ? {{32{mul_full_prod[31]}}, mul_full_prod[31:0]} : mul_full_prod[XLEN-1:0];
+
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       valid_o  <= 1'b0;
@@ -205,30 +243,21 @@ module sukuna_int_eu #(
     end else if (div_done) begin
       valid_o  <= 1'b1;
       rd_o     <= div_rd_q;
-      result_o <= div_is_rem_q ? div_remainder : div_quotient;
+      result_o <= div_final_res;
     end else if (MUL_LAT > 0 && mul_pipe_vld_q[MUL_LAT-1]) begin
       valid_o  <= 1'b1;
       rd_o     <= (MUL_LAT > 1) ? mul_rd_q : rd_i;
-      result_o <= mul_full_prod[XLEN-1:0];
+      result_o <= mul_final_res;
     end else if (valid_i && !is_mul && !is_div_op) begin
-      valid_o <= 1'b1;
-      rd_o    <= rd_i;
-      case (alu_op_i)
-        `ALU_ADD:  result_o <= addsub_res;
-        `ALU_SUB:  result_o <= addsub_res;
-        `ALU_SLL:  result_o <= shift_res;
-        `ALU_SLT:  result_o <= {{(XLEN-1){1'b0}}, slt_val};
-        `ALU_SLTU: result_o <= {{(XLEN-1){1'b0}}, sltu_val};
-        `ALU_XOR:  result_o <= logic_xor;
-        `ALU_SRL:  result_o <= shift_res;
-        `ALU_SRA:  result_o <= shift_res;
-        `ALU_OR:   result_o <= logic_or;
-        `ALU_AND:  result_o <= logic_and;
-        default:   result_o <= addsub_res;
-      endcase
+      valid_o  <= 1'b1;
+      rd_o     <= rd_i;
+      result_o <= final_alu_res;
     end else if (!busy_o) begin
       valid_o <= 1'b0;
     end
   end
+
+  // Avoid unused variable warnings
+  wire _unused = &{1'b0, div_ready, 1'b0};
 
 endmodule

@@ -72,6 +72,6 @@ module sukuna_hazard_unit (
   assign flush_id1_o = global_flush;
   assign flush_id2_o = global_flush || load_use_hazard; // Bubble insertion
   assign flush_id3_o = global_flush;
-  assign flush_ex_o  = global_flush;
+  assign flush_ex_o  = trap_flush_i;
 
 endmodule

@@ -49,8 +49,12 @@ module sk_ram_ff #(
     end
   end
 
-  // Asynchronous / Combinational Read Ports
-  assign rdata_a_o = (ZERO_REG0 && (raddr_a_i == {ADDR_WIDTH{1'b0}})) ? {DATA_WIDTH{1'b0}} : mem[raddr_a_i];
-  assign rdata_b_o = (ZERO_REG0 && (raddr_b_i == {ADDR_WIDTH{1'b0}})) ? {DATA_WIDTH{1'b0}} : mem[raddr_b_i];
+  // Asynchronous / Combinational Read Ports with write forwarding
+  assign rdata_a_o = (ZERO_REG0 && (raddr_a_i == {ADDR_WIDTH{1'b0}})) ? {DATA_WIDTH{1'b0}} :
+                     (wen_i && (waddr_i == raddr_a_i))                 ? wdata_i :
+                     mem[raddr_a_i];
+  assign rdata_b_o = (ZERO_REG0 && (raddr_b_i == {ADDR_WIDTH{1'b0}})) ? {DATA_WIDTH{1'b0}} :
+                     (wen_i && (waddr_i == raddr_b_i))                 ? wdata_i :
+                     mem[raddr_b_i];
 
 endmodule

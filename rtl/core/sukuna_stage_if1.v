@@ -14,7 +14,8 @@ module sukuna_stage_if1 #(
   parameter HART_ID     = 0,
   parameter XLEN        = `XLEN,
   parameter VADDR_WIDTH = `VADDR_WIDTH,
-  parameter PADDR_WIDTH = `PADDR_WIDTH
+  parameter PADDR_WIDTH = `PADDR_WIDTH,
+  parameter RESET_PC    = 64'h0000_0000_8000_0000
 )(
   input  wire                   clk_i,
   input  wire                   rst_ni,
@@ -44,6 +45,7 @@ module sukuna_stage_if1 #(
 );
 
   reg [XLEN-1:0] pc_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  wire [31:0] _unused_hart = HART_ID;
 
   // Request virtual address to ITLB (word-aligned)
   assign itlb_req_valid_o = !stall_i;
@@ -59,9 +61,9 @@ module sukuna_stage_if1 #(
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      pc_q        <= {XLEN{1'b0}};
+      pc_q        <= RESET_PC;
       if1_valid_o <= 1'b0;
-      if1_pc_o    <= {XLEN{1'b0}};
+      if1_pc_o    <= RESET_PC;
     end else if (flush_i) begin
       pc_q        <= redirect_pc_i;
       if1_valid_o <= 1'b0;

@@ -85,6 +85,21 @@ help:
 	@echo "  make clean           : Remove build artifacts"
 
 # ----------------------------------------------------------------------------
+# Simulation Targets
+# ----------------------------------------------------------------------------
+.PHONY: sim sim-build
+
+SRC_TB := tb/sukuna_tb_top.v tb/sukuna_axi_mem.v
+
+sim: sim-build
+	@echo "==> Running simulation with vvp..."
+	vvp $(BUILD_DIR)/sukuna_tb $(EXTRA_SIM_ARGS)
+
+sim-build: $(ALL_RTL_SRCS) $(SRC_TB) | $(BUILD_DIR)
+	@echo "==> Compiling testbench with Icarus Verilog..."
+	$(IVERILOG) -g2005 -Wall -Wno-timescale $(CONFIG_DEFINES) $(INCLUDES) -Itb -o $(BUILD_DIR)/sukuna_tb $(ALL_RTL_SRCS) $(SRC_TB)
+
+# ----------------------------------------------------------------------------
 # Lint & Syntax Validation Targets
 # ----------------------------------------------------------------------------
 .PHONY: lint lint-verilator lint-iverilog

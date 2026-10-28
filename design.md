@@ -361,3 +361,89 @@ flowchart TB
    - FP/SIMD 調停器、L1/L2 TLB、およびハードウェアPTWの接続。
 5. **コヒーレンシ & L2キャッシュ統合 (Phase 5)**:
    - 3スレッド間の一貫性制御と共有L2キャッシュの統合検証。
+
+---
+
+## 7. 特権アーキテクチャ & CSR詳細仕様 (Privileged Architecture & CSRs)
+
+Sukuna-RISC は、UNIX系OS（Linux, FreeBSD）およびリアルタイムOSの実行を可能とするため、RISC-V Privileged Architecture v1.12 に準拠した Machine (M), Supervisor (S), User (U) の3つの特権モード、トラップ委譲機構、および仮想記憶制御レジスタを実装しています。
+
+### 7.1 サポート特権モード & 状態遷移
+- **Machine Mode (`priv_mode = 2'b11`)**: 最上位特権。リセット時の初期状態。全CSRへのフルアクセス権限。
+- **Supervisor Mode (`priv_mode = 2'b01`)**: OSカーネル実行モード。仮想記憶（Sv39）管理、S-mode例外処理。
+- **User Mode (`priv_mode = 2'b00`)**: ユーザアプリケーション実行モード。特権CSRアクセス禁止。
+
+```
+       +---------------------------------------------+
+       |                  M-Mode                     |
+       |  (mtvec, mepc, mcause, mtval, mstatus)      |
+       +---------------------------------------------+
+             | MRET                  ^ Traps / ECALL
+             v (Restore MPP/MPIE)    | (M-delegated=0)
+       +---------------------------------------------+
+       |                  S-Mode                     |
+       |  (stvec, sepc, scause, stval, sstatus, satp)|
+       +---------------------------------------------+
+             | SRET                  ^ Traps / ECALL
+             v (Restore SPP/SPIE)    | (M-delegated=1)
+       +---------------------------------------------+
+       |                  U-Mode                     |
+       |             (User Programs)                 |
+       +---------------------------------------------+
+```
+
+### 7.2 CSR (Control and Status Register) レジスタマップ
+
+各Hart（スレッドパイプライン）は独立した `sukuna_csr_unit` を保持します。
+
+| アドレス | レジスタ名 | 権限 | 説明 |
+| :--- | :--- | :--- | :--- |
+| `0x300` | `mstatus` | M (RW) | マシンステータス (MIE, MPIE, MPP, FS, SUM, MXR, TVM, TW, TSR) |
+| `0x301` | `misa` | M (RO) | アーキテクチャ構成 (`RV64IMAFDCSU`, 64'h80000000_0014112D) |
+| `0x302` | `medeleg` | M (RW) | 例外委譲レジスタ (16-bit, S-modeへ委譲する例外ビット) |
+| `0x303` | `mideleg` | M (RW) | 割り込み委譲レジスタ (16-bit, S-modeへ委譲する割り込みビット) |
+| `0x304` | `mie` | M (RW) | マシン割り込みイネーブル (MEIE, MTIE, MSIE) |
+| `0x305` | `mtvec` | M (RW) | マシントラップベクタ基底アドレス (Direct / Vectored) |
+| `0x340` | `mscratch`| M (RW) | マシン作業用スクラッチレジスタ (64-bit) |
+| `0x341` | `mepc` | M (RW) | マシン例外発生PC (トラップ時保存先) |
+| `0x342` | `mcause` | M (RW) | マシントラップ原因コード (MSB=割り込みフラグ, [4:0]=Cause) |
+| `0x343` | `mtval` | M (RW) | マシントラップ付加情報 (不正アドレス / 不正命令コード) |
+| `0x344` | `mip` | M (RO/W) | マシン割り込み保留 (外部PLIC/CLINT入力およびソフトウェア割り込み) |
+| `0xF14` | `mhartid` | M (RO) | ハードウェアスレッドID (`0`, `1`, `2`) |
+| `0x100` | `sstatus` | S (RW) | `mstatus` のS-mode射影マスクビュー (`SIE, SPIE, SPP, FS, SUM, MXR`) |
+| `0x104` | `sie` | S (RW) | `mideleg` で委譲されたS-mode割り込みイネーブル (`SEIE, STIE, SSIE`) |
+| `0x105` | `stvec` | S (RW) | スーパーバイザトラップベクタ基底アドレス |
+| `0x140` | `sscratch`| S (RW) | スーパーバイザ作業用スクラッチレジスタ (64-bit) |
+| `0x141` | `sepc` | S (RW) | スーパーバイザ例外発生PC |
+| `0x142` | `scause` | S (RW) | スーパーバイザトラップ原因コード |
+| `0x143` | `stval` | S (RW) | スーパーバイザトラップ付加情報 |
+| `0x144` | `sip` | S (RW) | スーパーバイザ割り込み保留 (`SEIP, STIP, SSIP`) |
+| `0x180` | `satp` | S (RW) | ページテーブルルートアドレス & MMUモード (`MODE[63:60], ASID[59:44], PPN[43:0]`) |
+
+### 7.3 レーン固定デュアルイシューにおける特権命令不変条件 (Single-Issue Invariant)
+
+パイプライン内の特権状態の整合性を保証するため、特権命令およびCSR操作命令には厳格な単一発行規則を適用します：
+1. **Lane 0 固定単一イシュー**:
+   - `opcode == 7'b1110011` (SYSTEM) を検出した場合、ID1段において `id1_type0_o <= TYPE_NONE` を強制。
+   - ID2段において `can_dual` 判定を抑制し、後続命令（Lane 1）にハーフ幅バブル (`id2_valid1_o = 0`) を注入。
+   - フェッチ消費ステップを 1 (`consume_step = 1`) に制限し、次サイクルに後続命令を Lane 0 で再フェッチ。
+2. **投機的CSR汚染の完全防止 (WB Commit Separation)**:
+   - **EX段**: CSRレジスタのゼロ遅延組み合わせ読み出し（`csr_raddr_o` $\to$ `csr_rdata_i`）およびアクセス権限チェック（`csr_illegal_i`）。
+   - **WB段**: 命令が先行例外なしで確定コミットした瞬間にのみ、CSRレジスタアレイへの書き込みコミット（`csr_commit_wen_o`）を実行。
+   - これにより、EX段以前のストールや先行命令例外によるCSR破壊を完全に防止。
+
+### 7.4 トラップ・リターン・仮想記憶切り替えフロー
+- **例外発生 (`ECALL`, `EBREAK`, `PAGE_FAULT`, `ILLEGAL_INST`)**:
+  - WB段でコミット時に `trap_valid_o = 1` を発行。
+  - レジスタファイルへのコミット（Port 0/1/2）を即座に抑止。
+  - `u_csr` が `mideleg`/`medeleg` に基づき M-Mode / S-Mode トラップ先を自動判定し、`mepc`/`sepc` と `mcause`/`scause` を保存。
+  - `trap_flush_o = 1` を出力し、上流パイプライン段（`IF1`〜`EX`）をすべてフラッシュ。
+  - `trap_target_pc_o` (`mtvec`/`stvec`) を IF1 段へ直結し、次サイクルからトラップハンドラを実行。
+- **特権復帰 (`MRET`, `SRET`)**:
+  - WB段で `mret_valid_o` / `sret_valid_o` を発行。
+  - 特権レベルを `MPP` / `SPP` から復帰、割り込みイネーブルを `MPIE` / `SPIE` から復帰。
+  - パイプラインをフラッシュし、フェッチPCを `mepc` / `sepc` にリダイレクト。
+- **仮想記憶切り替え (`satp` 書換 / `SFENCE.VMA`)**:
+  - WB段で `satp` の更新がコミットされた瞬間に `trap_flush_o` をアサートし、IF1のPCを `PC + 4` にリダイレクト。
+  - MMUおよびTLBの古いアドレスマッピングによるパイプライン内の先行フェッチ命令を完全にパージ。
+

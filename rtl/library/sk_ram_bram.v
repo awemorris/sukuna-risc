@@ -41,6 +41,15 @@ module sk_ram_bram #(
   reg [DATA_WIDTH-1:0] rdata_out_q;
 
   integer i;
+  integer init_i;
+
+  initial begin
+    for (init_i = 0; init_i < DEPTH; init_i = init_i + 1) begin
+      mem[init_i] = {DATA_WIDTH{1'b0}};
+    end
+    rdata_pipe_q = {DATA_WIDTH{1'b0}};
+    rdata_out_q  = {DATA_WIDTH{1'b0}};
+  end
 
   // Synchronous Write
   always @(posedge clk_i) begin
@@ -57,10 +66,14 @@ module sk_ram_bram #(
     end
   end
 
-  // Synchronous Read (Stage 1)
+  // Synchronous Read (Stage 1) - WRITE_FIRST forwarding
   always @(posedge clk_i) begin
     if (ren_i) begin
-      rdata_pipe_q <= mem[raddr_i];
+      if (wen_i && (waddr_i == raddr_i)) begin
+        rdata_pipe_q <= wdata_i;
+      end else begin
+        rdata_pipe_q <= mem[raddr_i];
+      end
     end
   end
 
