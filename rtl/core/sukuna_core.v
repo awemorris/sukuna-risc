@@ -68,7 +68,7 @@ module sukuna_core #(
   // L1D lines (word-aligned & byte-enables)
   wire [NUM_HARTS-1:0]                 l1d_req_valid;
   wire [NUM_HARTS-1:0]                 l1d_req_write;
-  wire [NUM_HARTS*3-1:0]               l1d_req_op;
+  wire [NUM_HARTS*4-1:0]               l1d_req_op;
   wire [NUM_HARTS*8-1:0]               l1d_req_byte_en;
   wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0] l1d_paddr_w;
   wire [NUM_HARTS*XLEN-1:0]            l1d_wdata;
@@ -141,7 +141,7 @@ module sukuna_core #(
 
         .l1d_req_valid_o    (l1d_req_valid[h]),
         .l1d_req_write_o    (l1d_req_write[h]),
-        .l1d_req_op_o       (l1d_req_op[h*3 +: 3]),
+        .l1d_req_op_o       (l1d_req_op[h*4 +: 4]),
         .l1d_req_byte_en_o  (l1d_req_byte_en[h*8 +: 8]),
         .l1d_paddr_w_o      (l1d_paddr_w[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .l1d_wdata_o        (l1d_wdata[h*XLEN +: XLEN]),

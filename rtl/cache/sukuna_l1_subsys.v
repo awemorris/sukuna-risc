@@ -28,7 +28,7 @@ module sukuna_l1_subsys #(
   // AGU/MA Interfaces from 3 Harts (Word-aligned address & byte enable)
   input  wire [NUM_HARTS-1:0]                   mem_req_valid_i,
   input  wire [NUM_HARTS-1:0]                   mem_req_write_i,
-  input  wire [NUM_HARTS*3-1:0]                 mem_req_op_i,
+  input  wire [NUM_HARTS*4-1:0]                 mem_req_op_i,
   input  wire [NUM_HARTS*8-1:0]                 mem_byte_en_i,
   input  wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0]   mem_paddr_w_i,
   input  wire [NUM_HARTS*XLEN-1:0]              mem_wdata_i,
@@ -115,7 +115,7 @@ module sukuna_l1_subsys #(
         .rst_ni             (rst_ni),
         .mem_req_valid_i    (mem_req_valid_i[h]),
         .mem_req_write_i    (mem_req_write_i[h]),
-        .mem_req_op_i       (mem_req_op_i[h*3 +: 3]),
+        .mem_req_op_i       (mem_req_op_i[h*4 +: 4]),
         .mem_byte_en_i      (mem_byte_en_i[h*8 +: 8]),
         .mem_paddr_w_i      (mem_paddr_w_i[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .mem_wdata_i        (mem_wdata_i[h*XLEN +: XLEN]),

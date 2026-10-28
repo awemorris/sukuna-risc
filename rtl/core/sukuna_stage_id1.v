@@ -49,8 +49,8 @@ module sukuna_stage_id1 #(
   output reg  [4:0]       id1_rs1_0_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [4:0]       id1_rs2_0_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0]  id1_imm0_o,       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [3:0]       id1_alu_op0_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [2:0]       id1_mem_op0_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [4:0]       id1_alu_op0_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [3:0]       id1_mem_op0_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [2:0]       id1_sys_op0_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [2:0]       id1_priv_op0_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [11:0]      id1_csr_addr0_o,  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -69,8 +69,8 @@ module sukuna_stage_id1 #(
   output reg  [4:0]       id1_rs1_1_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [4:0]       id1_rs2_1_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0]  id1_imm1_o,       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [3:0]       id1_alu_op1_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [2:0]       id1_mem_op1_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [4:0]       id1_alu_op1_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [3:0]       id1_mem_op1_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              id1_is_word1_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              id1_use_imm1_o    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 );
@@ -117,7 +117,7 @@ module sukuna_stage_id1 #(
                            is_store0                 ? imm_s0 : imm_i0;
 
   // ALU Opcode for Lane 0
-  reg [3:0] alu_op0_comb;
+  reg [4:0] alu_op0_comb;
   always @(*) begin
     if (is_lui0 || is_auipc0 || is_load0 || is_store0 || is_jal0 || is_jalr0) begin
       alu_op0_comb = `ALU_ADD;
@@ -125,10 +125,13 @@ module sukuna_stage_id1 #(
       if (funct7_0 == 7'b0000001) begin // RV64M Multiplier/Divider
         case (funct3_0)
           3'b000:  alu_op0_comb = `ALU_MUL;
+          3'b001:  alu_op0_comb = `ALU_MULH;
+          3'b010:  alu_op0_comb = `ALU_MULHSU;
+          3'b011:  alu_op0_comb = `ALU_MULHU;
           3'b100:  alu_op0_comb = `ALU_DIV;
-          3'b101:  alu_op0_comb = `ALU_DIV; // Unsigned div handled by signed flag
+          3'b101:  alu_op0_comb = `ALU_DIVU;
           3'b110:  alu_op0_comb = `ALU_REM;
-          3'b111:  alu_op0_comb = `ALU_REM;
+          3'b111:  alu_op0_comb = `ALU_REMU;
           default: alu_op0_comb = `ALU_MUL;
         endcase
       end else begin // Standard ALU
@@ -217,7 +220,7 @@ module sukuna_stage_id1 #(
   wire [XLEN-1:0] imm_l1 = (is_lui1 || is_auipc1) ? imm_u1 :
                            is_store1              ? imm_s1 : imm_i1;
 
-  reg [3:0] alu_op1_comb;
+  reg [4:0] alu_op1_comb;
   always @(*) begin
     if (is_lui1 || is_auipc1 || is_load1 || is_store1) begin
       alu_op1_comb = `ALU_ADD;
@@ -225,10 +228,13 @@ module sukuna_stage_id1 #(
       if (funct7_1 == 7'b0000001) begin
         case (funct3_1)
           3'b000:  alu_op1_comb = `ALU_MUL;
+          3'b001:  alu_op1_comb = `ALU_MULH;
+          3'b010:  alu_op1_comb = `ALU_MULHSU;
+          3'b011:  alu_op1_comb = `ALU_MULHU;
           3'b100:  alu_op1_comb = `ALU_DIV;
-          3'b101:  alu_op1_comb = `ALU_DIV;
+          3'b101:  alu_op1_comb = `ALU_DIVU;
           3'b110:  alu_op1_comb = `ALU_REM;
-          3'b111:  alu_op1_comb = `ALU_REM;
+          3'b111:  alu_op1_comb = `ALU_REMU;
           default: alu_op1_comb = `ALU_MUL;
         endcase
       end else begin
@@ -274,8 +280,8 @@ module sukuna_stage_id1 #(
       id1_rs1_0_o       <= 5'd0;
       id1_rs2_0_o       <= 5'd0;
       id1_imm0_o        <= {XLEN{1'b0}};
-      id1_alu_op0_o     <= 4'd0;
-      id1_mem_op0_o     <= 3'd0;
+      id1_alu_op0_o     <= 5'd0;
+      id1_mem_op0_o     <= 4'd0;
       id1_sys_op0_o     <= `SYS_NONE;
       id1_priv_op0_o    <= `PRIV_NONE;
       id1_csr_addr0_o   <= 12'd0;
@@ -294,8 +300,8 @@ module sukuna_stage_id1 #(
       id1_rs1_1_o       <= 5'd0;
       id1_rs2_1_o       <= 5'd0;
       id1_imm1_o        <= {XLEN{1'b0}};
-      id1_alu_op1_o     <= 4'd0;
-      id1_mem_op1_o     <= 3'd0;
+      id1_alu_op1_o     <= 5'd0;
+      id1_mem_op1_o     <= 4'd0;
       id1_is_word1_o    <= 1'b0;
       id1_use_imm1_o    <= 1'b0;
     end else begin
@@ -315,7 +321,7 @@ module sukuna_stage_id1 #(
         id1_rs2_0_o       <= if2_inst0_i[24:20];
         id1_imm0_o        <= imm_l0;
         id1_alu_op0_o     <= alu_op0_comb;
-        id1_mem_op0_o     <= funct3_0;
+        id1_mem_op0_o     <= {is_store0, funct3_0};
         id1_sys_op0_o     <= sys_op0;
         id1_priv_op0_o    <= priv_op0;
         id1_csr_addr0_o   <= funct12_0;
@@ -336,7 +342,7 @@ module sukuna_stage_id1 #(
         id1_rs2_1_o       <= if2_inst1_i[24:20];
         id1_imm1_o        <= imm_l1;
         id1_alu_op1_o     <= alu_op1_comb;
-        id1_mem_op1_o     <= funct3_1;
+        id1_mem_op1_o     <= {is_store1, funct3_1};
         id1_is_word1_o    <= is_op32_1 || is_opi32_1;
         id1_use_imm1_o    <= is_op_imm1 || is_opi32_1 || is_lui1 || is_auipc1 || is_load1 || is_store1;
       end

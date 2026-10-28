@@ -22,7 +22,7 @@ module sukuna_int_eu #(
   input  wire            rst_ni,
 
   input  wire            valid_i,
-  input  wire [3:0]      alu_op_i,
+  input  wire [4:0]      alu_op_i,
   input  wire            is_word_i,
   input  wire [XLEN-1:0] src1_i,
   input  wire [XLEN-1:0] src2_i,
@@ -104,12 +104,19 @@ module sukuna_int_eu #(
   // --------------------------------------------------------------------------
   // 3. Unified Shared Multiplier (sk_mul, Parameterizable LAT, DSP Target)
   // --------------------------------------------------------------------------
-  wire is_mul = (alu_op_i == `ALU_MUL);
+  wire is_mul_any = (alu_op_i == `ALU_MUL) ||
+                    (alu_op_i == `ALU_MULH) ||
+                    (alu_op_i == `ALU_MULHSU) ||
+                    (alu_op_i == `ALU_MULHU);
   wire [129:0] mul_full_prod;
 
-  // Sign extension to 65 bits for signed multiplication
-  wire [64:0] mul_a = is_word_i ? {{33{src1_i[31]}}, src1_i[31:0]} : {src1_i[XLEN-1], src1_i};
-  wire [64:0] mul_b = is_word_i ? {{33{src2_i[31]}}, src2_i[31:0]} : {src2_i[XLEN-1], src2_i};
+  wire mul_a_signed = (alu_op_i != `ALU_MULHU);
+  wire mul_b_signed = (alu_op_i == `ALU_MUL) || (alu_op_i == `ALU_MULH);
+
+  wire [64:0] mul_a = mul_a_signed ? (is_word_i ? {{33{src1_i[31]}}, src1_i[31:0]} : {src1_i[XLEN-1], src1_i})
+                                   : (is_word_i ? {{33{1'b0}}, src1_i[31:0]} : {1'b0, src1_i});
+  wire [64:0] mul_b = mul_b_signed ? (is_word_i ? {{33{src2_i[31]}}, src2_i[31:0]} : {src2_i[XLEN-1], src2_i})
+                                   : (is_word_i ? {{33{1'b0}}, src2_i[31:0]} : {1'b0, src2_i});
 
   sk_mul #(
     .AW    (65),
@@ -130,6 +137,7 @@ module sukuna_int_eu #(
   reg [4:0]       mul_rd_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg             mul_busy_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg             mul_word_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg             mul_high_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -137,10 +145,12 @@ module sukuna_int_eu #(
       mul_rd_q       <= 5'd0;
       mul_busy_q     <= 1'b0;
       mul_word_q     <= 1'b0;
+      mul_high_q     <= 1'b0;
     end else begin
-      mul_pipe_vld_q <= {mul_pipe_vld_q[MUL_LAT-1:0], (valid_i && is_mul)};
-      if (valid_i && is_mul) begin
+      mul_pipe_vld_q <= {mul_pipe_vld_q[MUL_LAT-1:0], (valid_i && is_mul_any)};
+      if (valid_i && is_mul_any) begin
         mul_word_q <= is_word_i;
+        mul_high_q <= (alu_op_i == `ALU_MULH) || (alu_op_i == `ALU_MULHSU) || (alu_op_i == `ALU_MULHU);
         if (MUL_LAT > 1) begin
           mul_rd_q   <= rd_i;
           mul_busy_q <= 1'b1;
@@ -152,9 +162,12 @@ module sukuna_int_eu #(
   end
 
   // --------------------------------------------------------------------------
-  // 4. Unified Shared Divider (DIV, REM)
+  // 4. Unified Shared Divider (DIV, REM, DIVU, REMU)
   // --------------------------------------------------------------------------
-  wire is_div_op = (alu_op_i == `ALU_DIV) || (alu_op_i == `ALU_REM);
+  wire is_div_signed = (alu_op_i == `ALU_DIV)  || (alu_op_i == `ALU_REM);
+  wire is_rem_op     = (alu_op_i == `ALU_REM)  || (alu_op_i == `ALU_REMU);
+  wire is_div_op     = (alu_op_i == `ALU_DIV)  || (alu_op_i == `ALU_REM) ||
+                       (alu_op_i == `ALU_DIVU) || (alu_op_i == `ALU_REMU);
   wire div_start = valid_i && is_div_op && !div_busy_q;
   wire div_ready;
   wire div_done;
@@ -165,8 +178,8 @@ module sukuna_int_eu #(
   reg  div_word_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0] div_rd_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  wire [XLEN-1:0] div_src1 = is_word_i ? {{32{src1_i[31]}}, src1_i[31:0]} : src1_i;
-  wire [XLEN-1:0] div_src2 = is_word_i ? {{32{src2_i[31]}}, src2_i[31:0]} : src2_i;
+  wire [XLEN-1:0] div_src1 = is_word_i ? (is_div_signed ? {{32{src1_i[31]}}, src1_i[31:0]} : {{32{1'b0}}, src1_i[31:0]}) : src1_i;
+  wire [XLEN-1:0] div_src2 = is_word_i ? (is_div_signed ? {{32{src2_i[31]}}, src2_i[31:0]} : {{32{1'b0}}, src2_i[31:0]}) : src2_i;
 
   sk_div #(
     .WIDTH(XLEN),
@@ -175,7 +188,7 @@ module sukuna_int_eu #(
     .clk_i        (clk_i),
     .rst_ni       (rst_ni),
     .start_i      (div_start),
-    .signed_mode_i(1'b1),
+    .signed_mode_i(is_div_signed),
     .dividend_i   (div_src1),
     .divisor_i    (div_src2),
     .ready_o      (div_ready),
@@ -194,7 +207,7 @@ module sukuna_int_eu #(
     end else begin
       if (div_start) begin
         div_busy_q   <= 1'b1;
-        div_is_rem_q <= (alu_op_i == `ALU_REM);
+        div_is_rem_q <= is_rem_op;
         div_word_q   <= is_word_i;
         div_rd_q     <= rd_i;
       end else if (div_done) begin
@@ -233,7 +246,8 @@ module sukuna_int_eu #(
   wire [XLEN-1:0] final_alu_res = is_word_i ? {{32{alu_raw_res[31]}}, alu_raw_res[31:0]} : alu_raw_res;
   wire [XLEN-1:0] div_res_raw   = div_is_rem_q ? div_remainder : div_quotient;
   wire [XLEN-1:0] div_final_res = div_word_q ? {{32{div_res_raw[31]}}, div_res_raw[31:0]} : div_res_raw;
-  wire [XLEN-1:0] mul_final_res = mul_word_q ? {{32{mul_full_prod[31]}}, mul_full_prod[31:0]} : mul_full_prod[XLEN-1:0];
+  wire [XLEN-1:0] mul_raw_res   = mul_high_q ? mul_full_prod[127:64] : mul_full_prod[63:0];
+  wire [XLEN-1:0] mul_final_res = mul_word_q ? {{32{mul_raw_res[31]}}, mul_raw_res[31:0]} : mul_raw_res;
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -248,7 +262,7 @@ module sukuna_int_eu #(
       valid_o  <= 1'b1;
       rd_o     <= (MUL_LAT > 1) ? mul_rd_q : rd_i;
       result_o <= mul_final_res;
-    end else if (valid_i && !is_mul && !is_div_op) begin
+    end else if (valid_i && !is_mul_any && !is_div_op) begin
       valid_o  <= 1'b1;
       rd_o     <= rd_i;
       result_o <= final_alu_res;

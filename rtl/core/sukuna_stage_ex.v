@@ -35,8 +35,8 @@ module sukuna_stage_ex #(
   input  wire [XLEN-1:0]        l0_src1_i,
   input  wire [XLEN-1:0]        l0_src2_i,
   input  wire [XLEN-1:0]        l0_imm_i,
-  input  wire [3:0]             l0_alu_op_i,
-  input  wire [2:0]             l0_mem_op_i,
+  input  wire [4:0]             l0_alu_op_i,
+  input  wire [3:0]             l0_mem_op_i,
   input  wire [2:0]             l0_sys_op_i,
   input  wire [2:0]             l0_priv_op_i,
   input  wire [11:0]            l0_csr_addr_i,
@@ -54,8 +54,8 @@ module sukuna_stage_ex #(
   input  wire [XLEN-1:0]        l1_src1_i,
   input  wire [XLEN-1:0]        l1_src2_i,
   input  wire [XLEN-1:0]        l1_imm_i,
-  input  wire [3:0]             l1_alu_op_i,
-  input  wire [2:0]             l1_mem_op_i,
+  input  wire [4:0]             l1_alu_op_i,
+  input  wire [3:0]             l1_mem_op_i,
   input  wire                   l1_is_word_i,
   input  wire                   l1_use_imm_i,
 
@@ -104,7 +104,7 @@ module sukuna_stage_ex #(
   // L1D Cache Interface (Word-aligned address & byte enable)
   output wire                   l1d_req_valid_o,
   output wire                   l1d_req_write_o,
-  output wire [2:0]             l1d_req_op_o,
+  output wire [3:0]             l1d_req_op_o,
   output wire [7:0]             l1d_req_byte_en_o,
   output wire [PADDR_WIDTH-1:2] l1d_paddr_w_o,
   output wire [XLEN-1:0]        l1d_wdata_o,
@@ -232,7 +232,7 @@ module sukuna_stage_ex #(
 
   wire [XLEN-1:0] int_src1    = int_en_l0_i ? int_src1_l0 : int_src1_l1;
   wire [XLEN-1:0] int_src2    = int_en_l0_i ? int_src2_l0 : int_src2_l1;
-  wire [3:0]      int_alu_op  = int_en_l0_i ? (is_branch0 ? `ALU_SUB : is_jump0 ? `ALU_ADD : l0_alu_op_i) :
+  wire [4:0]      int_alu_op  = int_en_l0_i ? (is_branch0 ? `ALU_SUB : is_jump0 ? `ALU_ADD : l0_alu_op_i) :
                                               l1_alu_op_i;
   wire [4:0]      int_rd      = int_en_l0_i ? (is_branch0 ? 5'd0 : l0_rd_i) : l1_rd_i;
   wire            int_is_word = int_en_l0_i ? (is_jump0 ? 1'b0 : l0_is_word_i) : l1_is_word_i;
@@ -307,7 +307,7 @@ module sukuna_stage_ex #(
   // MA-EU Selection
   // --------------------------------------------------------------------------
   wire ma_valid = (ma_en_l0_i && l0_valid_i) || (ma_en_l1_i && l1_valid_i);
-  wire [2:0]      ma_op     = ma_en_l0_i ? l0_mem_op_i : l1_mem_op_i;
+  wire [3:0]      ma_op     = ma_en_l0_i ? l0_mem_op_i : l1_mem_op_i;
   wire [4:0]      ma_rd     = ma_en_l0_i ? l0_rd_i     : l1_rd_i;
   wire [XLEN-1:0] ma_base   = ma_en_l0_i ? fwd_l0_src1 : fwd_l1_src1;
   wire [XLEN-1:0] ma_offset = ma_en_l0_i ? l0_imm_i    : l1_imm_i;
@@ -419,7 +419,7 @@ module sukuna_stage_ex #(
         sys_wfi_q       <= 1'b0;
         sys_sfence_q    <= 1'b0;
       end else if (!stall_i) begin
-        ex_l0_valid_q   <= l0_valid_i && !branch_mispredict_o;
+        ex_l0_valid_q   <= l0_valid_i;
         ex_l1_valid_q   <= l1_valid_i && !branch_mispredict_o;
         int_was_l0_q    <= int_en_l0_i && !is_csr_op && !is_priv_op;
         ma_was_l0_q     <= ma_en_l0_i;

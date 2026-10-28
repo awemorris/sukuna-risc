@@ -28,7 +28,7 @@ module sukuna_l1d_cache #(
   // Pipeline AGU/MA Interface (Word-aligned address & byte enable)
   input  wire                       mem_req_valid_i,
   input  wire                       mem_req_write_i,
-  input  wire [2:0]                 mem_req_op_i,
+  input  wire [3:0]                 mem_req_op_i,
   input  wire [7:0]                 mem_byte_en_i,     // Byte enable instead of raw address offset
   input  wire [PADDR_WIDTH-1:2]     mem_paddr_w_i,     // Word address (bits [1:0] omitted)
   input  wire [XLEN-1:0]            mem_wdata_i,

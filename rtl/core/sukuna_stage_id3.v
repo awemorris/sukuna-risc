@@ -28,8 +28,8 @@ module sukuna_stage_id3 #(
   input  wire [4:0]       id2_rs1_0_i,
   input  wire [4:0]       id2_rs2_0_i,
   input  wire [XLEN-1:0]  id2_imm0_i,
-  input  wire [3:0]       id2_alu_op0_i,
-  input  wire [2:0]       id2_mem_op0_i,
+  input  wire [4:0]       id2_alu_op0_i,
+  input  wire [3:0]       id2_mem_op0_i,
   input  wire [2:0]       id2_sys_op0_i,
   input  wire [2:0]       id2_priv_op0_i,
   input  wire [11:0]      id2_csr_addr0_i,
@@ -46,8 +46,8 @@ module sukuna_stage_id3 #(
   input  wire [4:0]       id2_rs1_1_i,
   input  wire [4:0]       id2_rs2_1_i,
   input  wire [XLEN-1:0]  id2_imm1_i,
-  input  wire [3:0]       id2_alu_op1_i,
-  input  wire [2:0]       id2_mem_op1_i,
+  input  wire [4:0]       id2_alu_op1_i,
+  input  wire [3:0]       id2_mem_op1_i,
   input  wire             id2_is_word1_i,
   input  wire             id2_use_imm1_i,
 
@@ -80,8 +80,8 @@ module sukuna_stage_id3 #(
   output reg  [XLEN-1:0]  ex_l0_src1_o,       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0]  ex_l0_src2_o,       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0]  ex_l0_imm_o,        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [3:0]       ex_l0_alu_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [2:0]       ex_l0_mem_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [4:0]       ex_l0_alu_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [3:0]       ex_l0_mem_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [2:0]       ex_l0_sys_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [2:0]       ex_l0_priv_op_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [11:0]      ex_l0_csr_addr_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -98,8 +98,8 @@ module sukuna_stage_id3 #(
   output reg  [XLEN-1:0]  ex_l1_src1_o,       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0]  ex_l1_src2_o,       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0]  ex_l1_imm_o,        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [3:0]       ex_l1_alu_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [2:0]       ex_l1_mem_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [4:0]       ex_l1_alu_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [3:0]       ex_l1_mem_op_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              ex_l1_is_word_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              ex_l1_use_imm_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
@@ -142,8 +142,8 @@ module sukuna_stage_id3 #(
       ex_l0_src1_o       <= {XLEN{1'b0}};
       ex_l0_src2_o       <= {XLEN{1'b0}};
       ex_l0_imm_o        <= {XLEN{1'b0}};
-      ex_l0_alu_op_o     <= 4'd0;
-      ex_l0_mem_op_o     <= 3'd0;
+      ex_l0_alu_op_o     <= 5'd0;
+      ex_l0_mem_op_o     <= 4'd0;
       ex_l0_sys_op_o     <= `SYS_NONE;
       ex_l0_priv_op_o    <= `PRIV_NONE;
       ex_l0_csr_addr_o   <= 12'd0;
@@ -160,8 +160,8 @@ module sukuna_stage_id3 #(
       ex_l1_src1_o       <= {XLEN{1'b0}};
       ex_l1_src2_o       <= {XLEN{1'b0}};
       ex_l1_imm_o        <= {XLEN{1'b0}};
-      ex_l1_alu_op_o     <= 4'd0;
-      ex_l1_mem_op_o     <= 3'd0;
+      ex_l1_alu_op_o     <= 5'd0;
+      ex_l1_mem_op_o     <= 4'd0;
       ex_l1_is_word_o    <= 1'b0;
       ex_l1_use_imm_o    <= 1'b0;
 

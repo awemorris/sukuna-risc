@@ -70,7 +70,7 @@ module sukuna_thread_pipe #(
   // --------------------------------------------------------------------------
   output wire                       l1d_req_valid_o,
   output wire                       l1d_req_write_o,
-  output wire [2:0]                 l1d_req_op_o,
+  output wire [3:0]                 l1d_req_op_o,
   output wire [7:0]                 l1d_req_byte_en_o,
   output wire [PADDR_WIDTH-1:2]     l1d_paddr_w_o,
   output wire [XLEN-1:0]            l1d_wdata_o,
@@ -143,8 +143,8 @@ module sukuna_thread_pipe #(
   wire [4:0]      id1_rs1_0, id1_rs1_1;
   wire [4:0]      id1_rs2_0, id1_rs2_1;
   wire [XLEN-1:0] id1_imm0, id1_imm1;
-  wire [3:0]      id1_alu_op0, id1_alu_op1;
-  wire [2:0]      id1_mem_op0, id1_mem_op1;
+  wire [4:0]      id1_alu_op0, id1_alu_op1;
+  wire [3:0]      id1_mem_op0, id1_mem_op1;
   wire [2:0]      id1_sys_op0;
   wire [2:0]      id1_priv_op0;
   wire [11:0]     id1_csr_addr0;
@@ -164,8 +164,8 @@ module sukuna_thread_pipe #(
   wire [4:0]      id2_rs1_0, id2_rs1_1;
   wire [4:0]      id2_rs2_0, id2_rs2_1;
   wire [XLEN-1:0] id2_imm0, id2_imm1;
-  wire [3:0]      id2_alu_op0, id2_alu_op1;
-  wire [2:0]      id2_mem_op0, id2_mem_op1;
+  wire [4:0]      id2_alu_op0, id2_alu_op1;
+  wire [3:0]      id2_mem_op0, id2_mem_op1;
   wire [2:0]      id2_sys_op0;
   wire [2:0]      id2_priv_op0;
   wire [11:0]     id2_csr_addr0;
@@ -187,8 +187,8 @@ module sukuna_thread_pipe #(
   wire [XLEN-1:0] ex_l0_src1, ex_l1_src1;
   wire [XLEN-1:0] ex_l0_src2, ex_l1_src2;
   wire [XLEN-1:0] ex_l0_imm, ex_l1_imm;
-  wire [3:0]      ex_l0_alu_op, ex_l1_alu_op;
-  wire [2:0]      ex_l0_mem_op, ex_l1_mem_op;
+  wire [4:0]      ex_l0_alu_op, ex_l1_alu_op;
+  wire [3:0]      ex_l0_mem_op, ex_l1_mem_op;
   wire [2:0]      ex_l0_sys_op;
   wire [2:0]      ex_l0_priv_op;
   wire [11:0]     ex_l0_csr_addr;

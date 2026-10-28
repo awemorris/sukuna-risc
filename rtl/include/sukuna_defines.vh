@@ -64,20 +64,25 @@
 `define SLOT_MA           2'b10
 `define SLOT_FP           2'b11
 
-// ALU Operations
-`define ALU_ADD           4'b0000
-`define ALU_SUB           4'b0001
-`define ALU_SLL           4'b0010
-`define ALU_SLT           4'b0011
-`define ALU_SLTU          4'b0100
-`define ALU_XOR           4'b0101
-`define ALU_SRL           4'b0110
-`define ALU_SRA           4'b0111
-`define ALU_OR            4'b1000
-`define ALU_AND           4'b1001
-`define ALU_MUL           4'b1010
-`define ALU_DIV           4'b1011
-`define ALU_REM           4'b1100
+// ALU Operations (5-bit)
+`define ALU_ADD           5'd0
+`define ALU_SUB           5'd1
+`define ALU_SLL           5'd2
+`define ALU_SLT           5'd3
+`define ALU_SLTU          5'd4
+`define ALU_XOR           5'd5
+`define ALU_SRL           5'd6
+`define ALU_SRA           5'd7
+`define ALU_OR            5'd8
+`define ALU_AND           5'd9
+`define ALU_MUL           5'd10
+`define ALU_MULH          5'd11
+`define ALU_MULHSU        5'd12
+`define ALU_MULHU         5'd13
+`define ALU_DIV           5'd14
+`define ALU_DIVU          5'd15
+`define ALU_REM           5'd16
+`define ALU_REMU          5'd17
 
 // Branch Operations
 `define BR_NONE           3'b000
@@ -93,15 +98,18 @@
 `define JUMP_JAL          2'b01
 `define JUMP_JALR         2'b10
 
-// Memory Access Operations
-`define MEM_LB            3'b000
-`define MEM_LH            3'b001
-`define MEM_LW            3'b010
-`define MEM_LD            3'b011
-`define MEM_SB            3'b100
-`define MEM_SH            3'b101
-`define MEM_SW            3'b110
-`define MEM_SD            3'b111
+// Memory Access Operations (4 bits: bit 3 = write, bits [2:0] = funct3)
+`define MEM_LB            4'b0000
+`define MEM_LH            4'b0001
+`define MEM_LW            4'b0010
+`define MEM_LD            4'b0011
+`define MEM_LBU           4'b0100
+`define MEM_LHU           4'b0101
+`define MEM_LWU           4'b0110
+`define MEM_SB            4'b1000
+`define MEM_SH            4'b1001
+`define MEM_SW            4'b1010
+`define MEM_SD            4'b1011
 
 // System / CSR Operations
 `define SYS_NONE          3'b000

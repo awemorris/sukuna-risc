@@ -18,7 +18,7 @@ module sukuna_agu_eu #(
 
   // Dispatched from ID/RF (Slot 1 MA)
   input  wire                   req_valid_i,
-  input  wire [2:0]             req_op_i,
+  input  wire [3:0]             req_op_i,
   input  wire [4:0]             req_rd_i,
   input  wire [XLEN-1:0]        req_base_i,
   input  wire [XLEN-1:0]        req_offset_i,
@@ -35,7 +35,7 @@ module sukuna_agu_eu #(
   // Dedicated L1D Port (Word-aligned address & byte-enable)
   output wire                   l1d_req_valid_o,
   output wire                   l1d_req_write_o,
-  output wire [2:0]             l1d_req_op_o,
+  output wire [3:0]             l1d_req_op_o,
   output wire [7:0]             l1d_req_byte_en_o,
   output wire [PADDR_WIDTH-1:2] l1d_paddr_w_o,
   output wire [XLEN-1:0]        l1d_wdata_o,
@@ -71,21 +71,32 @@ module sukuna_agu_eu #(
   wire [2:0] addr_lsb = calc_vaddr[2:0];
   reg [7:0]  calc_byte_en;
   always @(*) begin
-    case (req_op_i)
-      `MEM_LB, `MEM_SB: calc_byte_en = 8'b00000001 << addr_lsb;
-      `MEM_LH, `MEM_SH: calc_byte_en = 8'b00000011 << {addr_lsb[2:1], 1'b0};
-      `MEM_LW, `MEM_SW: calc_byte_en = addr_lsb[2] ? 8'b11110000 : 8'b00001111;
-      `MEM_LD, `MEM_SD: calc_byte_en = 8'b11111111;
-      default:          calc_byte_en = 8'b11111111;
+    case (req_op_i[1:0])
+      2'b00: calc_byte_en = 8'b00000001 << addr_lsb;
+      2'b01: calc_byte_en = 8'b00000011 << {addr_lsb[2:1], 1'b0};
+      2'b10: calc_byte_en = addr_lsb[2] ? 8'b11110000 : 8'b00001111;
+      2'b11: calc_byte_en = 8'b11111111;
+    endcase
+  end
+
+  // Store data replication
+  reg [XLEN-1:0] aligned_wdata;
+  always @(*) begin
+    case (req_op_i[1:0])
+      2'b00: aligned_wdata = {8{req_wdata_i[7:0]}};
+      2'b01: aligned_wdata = {4{req_wdata_i[15:0]}};
+      2'b10: aligned_wdata = {2{req_wdata_i[31:0]}};
+      2'b11: aligned_wdata = req_wdata_i;
     endcase
   end
 
   // Stage 1 Registers (ADDR)
   reg                     s1_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [2:0]               s1_op_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [3:0]               s1_op_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [7:0]               s1_byte_en_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0]               s1_rd_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [VADDR_WIDTH-1:2]   s1_vaddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [2:0]               s1_addr_lsb_q;/* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]          s1_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   assign busy_o = l1d_miss_stall_i;
@@ -94,7 +105,7 @@ module sukuna_agu_eu #(
   assign dtlb_vaddr_w_o      = s1_vaddr_w_q;
 
   assign l1d_req_valid_o     = s1_valid_q && dtlb_hit_i;
-  assign l1d_req_write_o     = s1_op_q[2]; // Write bit in mem_op
+  assign l1d_req_write_o     = s1_op_q[3]; // Bit 3 indicates store write
   assign l1d_req_op_o        = s1_op_q;
   assign l1d_req_byte_en_o   = s1_byte_en_q;
   assign l1d_paddr_w_o       = dtlb_paddr_w_i;
@@ -103,20 +114,42 @@ module sukuna_agu_eu #(
   // Pipeline Stage 1
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      s1_valid_q   <= 1'b0;
-      s1_op_q      <= 3'd0;
-      s1_byte_en_q <= 8'd0;
-      s1_rd_q      <= 5'd0;
-      s1_vaddr_w_q <= {(VADDR_WIDTH-2){1'b0}};
-      s1_wdata_q   <= {XLEN{1'b0}};
+      s1_valid_q    <= 1'b0;
+      s1_op_q       <= 4'd0;
+      s1_byte_en_q  <= 8'd0;
+      s1_rd_q       <= 5'd0;
+      s1_vaddr_w_q  <= {(VADDR_WIDTH-2){1'b0}};
+      s1_addr_lsb_q <= 3'd0;
+      s1_wdata_q    <= {XLEN{1'b0}};
     end else if (!l1d_miss_stall_i) begin
-      s1_valid_q   <= req_valid_i;
-      s1_op_q      <= req_op_i;
-      s1_byte_en_q <= calc_byte_en;
-      s1_rd_q      <= req_rd_i;
-      s1_vaddr_w_q <= calc_vaddr[VADDR_WIDTH-1:2];
-      s1_wdata_q   <= req_wdata_i;
+      s1_valid_q    <= req_valid_i;
+      s1_op_q       <= req_op_i;
+      s1_byte_en_q  <= calc_byte_en;
+      s1_rd_q       <= req_rd_i;
+      s1_vaddr_w_q  <= calc_vaddr[VADDR_WIDTH-1:2];
+      s1_addr_lsb_q <= calc_vaddr[2:0];
+      s1_wdata_q    <= aligned_wdata;
     end
+  end
+
+  // Load Response Formatting
+  wire [7:0]  byte_data  = l1d_rdata_i[s1_addr_lsb_q*8 +: 8];
+  wire [15:0] half_data  = l1d_rdata_i[{s1_addr_lsb_q[2:1], 1'b0}*8 +: 16];
+  wire [31:0] word_data  = s1_addr_lsb_q[2] ? l1d_rdata_i[63:32] : l1d_rdata_i[31:0];
+  wire [63:0] dword_data = l1d_rdata_i;
+
+  reg [XLEN-1:0] formatted_rdata;
+  always @(*) begin
+    case (s1_op_q)
+      `MEM_LB:  formatted_rdata = {{56{byte_data[7]}}, byte_data};
+      `MEM_LBU: formatted_rdata = {{56{1'b0}}, byte_data};
+      `MEM_LH:  formatted_rdata = {{48{half_data[15]}}, half_data};
+      `MEM_LHU: formatted_rdata = {{48{1'b0}}, half_data};
+      `MEM_LW:  formatted_rdata = {{32{word_data[31]}}, word_data};
+      `MEM_LWU: formatted_rdata = {{32{1'b0}}, word_data};
+      `MEM_LD:  formatted_rdata = dword_data;
+      default:  formatted_rdata = dword_data;
+    endcase
   end
 
   // Pipeline Stage 2 -> WB
@@ -128,7 +161,7 @@ module sukuna_agu_eu #(
     end else begin
       resp_valid_o <= l1d_resp_valid_i;
       resp_rd_o    <= s1_rd_q;
-      resp_rdata_o <= l1d_rdata_i;
+      resp_rdata_o <= formatted_rdata;
     end
   end
 

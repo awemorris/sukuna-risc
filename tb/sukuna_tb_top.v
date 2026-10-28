@@ -203,32 +203,26 @@ module sukuna_tb_top;
     enable = 1'b1;
     $display("[TB] Reset released, CPU core started at PC=0x8000_0000");
 
-    // Timeout watchdog (max 2000 cycles for basic test)
-    while (cycle_count < 50) begin
-      @(posedge clk);
-      cycle_count = cycle_count + 1;
-      if (cycle_count < 25) begin
-        $display("[CYCLE %0d] PC=0x%08h stall_if1=%b l1i_miss=%b l1i_refill_req=%b l2_req_val=%b l2_req_rdy=%b l2_state=%0d biu_arvalid=%b axi_arready=%b rvalid=%b",
-                 cycle_count,
-                 dut.u_core.gen_threads[0].u_thread.u_if1.pc_q[31:0],
-                 dut.u_core.gen_threads[0].u_thread.stall_if1,
-                 dut.u_core.gen_threads[0].u_thread.l1i_miss_i,
-                 dut.u_core.u_l1_subsys.gen_l1_caches[0].u_l1i.refill_req_valid_o,
-                 dut.u_core.u_l1_subsys.u_l2_arb.l2_req_valid_o,
-                 dut.u_l2_cache.req_ready_o,
-                 dut.u_l2_cache.state_q,
-                 dut.u_biu_axi4.m_axi_arvalid,
-                 dut.m_axi_arready,
-                 dut.m_axi_rvalid);
+    // Timeout watchdog (configurable via +MAX_CYCLES=<n>)
+    begin : watchdog
+      integer max_cycles;
+      max_cycles = 10000;
+      if ($value$plusargs("MAX_CYCLES=%d", max_cycles)) begin
+        $display("[TB] Watchdog max cycles set to %0d", max_cycles);
       end
+      while (cycle_count < max_cycles) begin
+        @(posedge clk);
+        cycle_count = cycle_count + 1;
+      end
+      $display("\n=======================================================");
+      $display("[TB TIMEOUT] Simulation reached timeout limit (%0d cycles).", cycle_count);
+      $display("=======================================================\n");
+      $finish;
     end
-
-    $display("[TB] Simulation reached timeout (%0d cycles).", cycle_count);
-    $finish;
   end
 
   // --------------------------------------------------------------------------
-  // Instruction Commit Monitor for Hart 0
+  // Instruction Commit & Trap Monitor for Hart 0
   // --------------------------------------------------------------------------
   wire wb_l0_valid = dut.u_core.gen_threads[0].u_thread.ex_wb_l0_valid;
   wire [63:0] wb_l0_pc = dut.u_core.gen_threads[0].u_thread.ex_wb_l0_pc;
@@ -240,21 +234,37 @@ module sukuna_tb_top;
   wire [4:0]  wb_l1_rd = dut.u_core.gen_threads[0].u_thread.ex_wb_l1_rd;
   wire [63:0] wb_l1_data = dut.u_core.gen_threads[0].u_thread.ex_wb_l1_data;
 
+  wire trap_valid = dut.u_core.gen_threads[0].u_thread.u_wb.trap_valid_o;
+  wire [5:0] trap_cause = dut.u_core.gen_threads[0].u_thread.u_wb.trap_cause_o;
+  wire [63:0] trap_pc = dut.u_core.gen_threads[0].u_thread.u_wb.trap_pc_o;
+  wire [63:0] gpr_a0 = dut.u_core.gen_threads[0].u_thread.u_regfile.u_bank0.mem[10];
+  wire [63:0] gpr_gp = dut.u_core.gen_threads[0].u_thread.u_regfile.u_bank0.mem[3];
+
   always @(posedge clk) begin
     if (rst_n) begin
       if (wb_l0_valid) begin
-        $display("[CYCLE %0t] COMMIT [L0] PC=0x%016h x%0d = 0x%016h", $time, wb_l0_pc, wb_l0_rd, wb_l0_data);
+        $display("[COMMIT L0] PC=0x%016h x%02d = 0x%016h", wb_l0_pc, wb_l0_rd, wb_l0_data);
       end
       if (wb_l1_valid) begin
-        $display("[CYCLE %0t] COMMIT [L1] PC=0x%016h x%0d = 0x%016h", $time, wb_l1_pc, wb_l1_rd, wb_l1_data);
+        $display("[COMMIT L1] PC=0x%016h x%02d = 0x%016h", wb_l1_pc, wb_l1_rd, wb_l1_data);
       end
 
-      // Check success condition: x10 == 0 at ecall or PC=0x80000020
-      if (wb_l0_valid && wb_l0_pc == 64'h80000020 && wb_l0_rd == 5'd10 && wb_l0_data == 64'd0) begin
-        $display("\n=======================================================");
-        $display("[TB SUCCESS] Basic RISC-V instructions executed successfully!");
-        $display("=======================================================\n");
-        $finish;
+      // Trap / Completion Monitor
+      if (trap_valid) begin
+        $display("[TRAP] PC=0x%016h cause=%0d a0=0x%016h gp=0x%016h", trap_pc, trap_cause, gpr_a0, gpr_gp);
+        if (trap_cause == `EXC_ECALL_M || trap_cause == `EXC_ECALL_S || trap_cause == `EXC_ECALL_U) begin
+          if (gpr_a0 == 64'd0) begin
+            $display("\n=======================================================");
+            $display("[TB SUCCESS] Test PASSED! (a0=0, PC=0x%016h)", trap_pc);
+            $display("=======================================================\n");
+            $finish;
+          end else begin
+            $display("\n=======================================================");
+            $display("[TB FAILURE] Test FAILED at case #%0d! (PC=0x%016h, gp=0x%016h)", gpr_a0, trap_pc, gpr_gp);
+            $display("=======================================================\n");
+            $finish;
+          end
+        end
       end
     end
   end
