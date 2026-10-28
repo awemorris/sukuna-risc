@@ -7,7 +7,7 @@ The name `Sukuna` comes from `Sukunahikona`, literally meaning "Small Genius," w
 
 Overall Architecture:
 - ISA: RISC-V RV64GC
-- Pipeline: In-order 3-SMT, Asymmetric Dual-issue, 1-core/3-thread
+- Pipeline: In-order 3-SMT, Asymmetric Dual-issue (IF1-IF2-ID1-ID2-ID3-EX-WB), 1-core/3-thread
 - Cache: L1I 48KB (16KB/thread), L1D 48KB (16KB/thread), shared L2 256KB
 
 Threading Strategy:
@@ -17,12 +17,13 @@ Threading Strategy:
 
 Pipeline:
 ```
-T1 Pipeline:  T1-IF1 --> T1-IF2 --> T1-ID --> T1-RF1 --> T1-RF2 --> [Shared EX] --> T1-WB
-T2 Pipeline:  T2-IF1 --> T2-IF2 --> T2-ID --> T2-RF1 --> T2-RF2 --> [Shared EX] --> T2-WB
-T3 Pipeline:  T3-IF1 --> T3-IF2 --> T3-ID --> T3-RF1 --> T3-RF2 --> [Shared EX] --> T3-WB
+T1 Pipeline:  T1-IF1 --> T1-IF2 --> T1-ID1 --> T1-ID2 --> T1-ID3 --> [Shared EX] --> T1-WB
+T2 Pipeline:  T2-IF1 --> T2-IF2 --> T2-ID1 --> T2-ID2 --> T2-ID3 --> [Shared EX] --> T2-WB
+T3 Pipeline:  T3-IF1 --> T3-IF2 --> T3-ID1 --> T3-ID2 --> T3-ID3 --> [Shared EX] --> T3-WB
 
-ID: Instruction Decode & Dual-issue check
-RF: Register Fetch
+ID1: Instruction Decode 1 (Zero-mux register fetch request & basic decode)
+ID2: Instruction Decode 2 (Parallel hazard check & swap determination)
+ID3: Instruction Decode 3 (Bypass resolution & operand swap steering)
 
 Issue Slot
 

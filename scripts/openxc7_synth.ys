@@ -1,0 +1,28 @@
+# ============================================================================
+# Yosys OpenXC7 Synthesis Script for Sukuna-RISC (KC705 / Kintex-7)
+# ============================================================================
+
+# Preprocessor definitions and include paths
+verilog_defines -DSYNTHESIS=1
+verilog_defaults -add -Irtl/include -Irtl/library -Irtl/core -Irtl/shared_ex -Irtl/mmu -Irtl/cache -Irtl/interrupt -Irtl/bus -Ibsp/kc705
+
+# Read Library and Subsystem Verilog Sources
+read_verilog rtl/library/*.v
+read_verilog rtl/interrupt/*.v
+read_verilog rtl/mmu/*.v
+read_verilog rtl/shared_ex/*.v
+read_verilog rtl/cache/*.v
+read_verilog rtl/core/*.v
+read_verilog rtl/bus/*.v
+read_verilog rtl/sukuna_top.v
+read_verilog bsp/kc705/sukuna_kc705_top.v
+
+# Elaborate design hierarchy
+hierarchy -check -top sukuna_kc705_top
+
+# Run Xilinx 7-Series Synthesis Flow
+synth_xilinx -top sukuna_kc705_top -family xc7 -flatten -abc9
+
+# Output netlists
+write_json build/sukuna_kc705.json
+write_edif -pvector bra build/sukuna_kc705.edif
