@@ -324,7 +324,7 @@ module sukuna_stage_id1 #(
         id1_jump_type0_o  <= jump_type0;
         id1_is_word0_o    <= is_op32_0 || is_opi32_0;
         id1_use_imm0_o    <= is_op_imm0 || is_opi32_0 || is_lui0 || is_auipc0 || is_load0 || is_store0 || is_jal0 || is_jalr0;
-        id1_use_pc0_o     <= is_auipc0 || is_jal0 || is_branch0;
+        id1_use_pc0_o     <= is_auipc0 || is_jal0;
 
         // Lane 1 Output Latching
         id1_valid1_o      <= if2_valid1_i;

@@ -303,13 +303,6 @@ module sukuna_stage_ex #(
   assign branch_mispredict_o = redirect_active;
   assign branch_target_o     = (l0_jump_type_i == `JUMP_JALR) ? {calc_target_pc[XLEN-1:1], 1'b0} : calc_target_pc;
 
-  always @(posedge clk_i) begin
-    if (redirect_active) begin
-      $display("[EX BRANCH] time=%0t pc=0x%h cond_met=%b target=0x%h cmp_eq=%b src1=0x%h src2=0x%h",
-               $time, l0_pc_i, branch_cond_met, branch_target_o, cmp_eq, int_src1, int_src2);
-    end
-  end
-
   // --------------------------------------------------------------------------
   // MA-EU Selection
   // --------------------------------------------------------------------------
