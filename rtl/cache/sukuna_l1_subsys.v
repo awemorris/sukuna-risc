@@ -20,6 +20,7 @@ module sukuna_l1_subsys #(
 
   // Fetch Interfaces from 3 Harts (Word-aligned: bits [1:0] omitted, 64-bit pair)
   input  wire [NUM_HARTS-1:0]                   fetch_req_valid_i,
+  input  wire [NUM_HARTS-1:0]                   fetch_stall_i,
   input  wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0]   fetch_paddr_w_i,
   output wire [NUM_HARTS-1:0]                   fetch_resp_valid_o,
   output wire [NUM_HARTS*64-1:0]                fetch_inst_o,
@@ -92,6 +93,7 @@ module sukuna_l1_subsys #(
       ) u_l1i (
         .clk_i                (clk_i),
         .rst_ni               (rst_ni),
+        .stall_i              (fetch_stall_i[h]),
         .fetch_req_valid_i    (fetch_req_valid_i[h]),
         .fetch_paddr_w_i      (fetch_paddr_w_i[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .fetch_resp_valid_o   (fetch_resp_valid_o[h]),

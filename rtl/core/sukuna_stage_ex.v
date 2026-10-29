@@ -217,7 +217,7 @@ module sukuna_stage_ex #(
   // INT-EU Operand Routing
   // --------------------------------------------------------------------------
   wire int_valid = (int_en_l0_i && l0_valid_i && !is_csr_op && !is_priv_op) ||
-                   (int_en_l1_i && l1_valid_i);
+                   (int_en_l1_i && l1_valid_i && !branch_mispredict_o);
 
   // Operand 1 selection
   wire [XLEN-1:0] int_src1_l0 = (is_jump0)   ? l0_pc_i :
@@ -251,7 +251,7 @@ module sukuna_stage_ex #(
   ) u_int_eu (
     .clk_i    (clk_i),
     .rst_ni   (rst_ni),
-    .valid_i  (int_valid && !stall_i && !flush_i && !branch_mispredict_o),
+    .valid_i  (int_valid && !stall_i && !flush_i),
     .alu_op_i (int_alu_op),
     .is_word_i(int_is_word),
     .src1_i   (int_src1),
@@ -306,7 +306,7 @@ module sukuna_stage_ex #(
   // --------------------------------------------------------------------------
   // MA-EU Selection
   // --------------------------------------------------------------------------
-  wire ma_valid = (ma_en_l0_i && l0_valid_i) || (ma_en_l1_i && l1_valid_i);
+  wire ma_valid = (ma_en_l0_i && l0_valid_i) || (ma_en_l1_i && l1_valid_i && !branch_mispredict_o);
   wire [3:0]      ma_op     = ma_en_l0_i ? l0_mem_op_i : l1_mem_op_i;
   wire [4:0]      ma_rd     = ma_en_l0_i ? l0_rd_i     : l1_rd_i;
   wire [XLEN-1:0] ma_base   = ma_en_l0_i ? fwd_l0_src1 : fwd_l1_src1;
@@ -325,7 +325,7 @@ module sukuna_stage_ex #(
   ) u_agu_eu (
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
-    .req_valid_i        (ma_valid && !stall_i && !flush_i && !branch_mispredict_o),
+    .req_valid_i        (ma_valid && !stall_i && !flush_i),
     .req_op_i           (ma_op),
     .req_rd_i           (ma_rd),
     .req_base_i         (ma_base),

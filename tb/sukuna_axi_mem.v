@@ -93,7 +93,8 @@ module sukuna_axi_mem #(
     end else begin
       case (r_state)
         R_IDLE: begin
-          s_axi_rlast <= 1'b0;
+          s_axi_rvalid <= 1'b0;
+          s_axi_rlast  <= 1'b0;
           if (s_axi_arvalid && s_axi_arready) begin
             r_curr_addr   <= s_axi_araddr;
             r_total_len   <= s_axi_arlen;

@@ -97,25 +97,47 @@ module sukuna_stage_id2 #(
   output reg              id2_ma_en_l1_o    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 );
 
-  // Dependency Analysis between Lane 0 and Lane 1
+  // --------------------------------------------------------------------------
+  // Dependency & Hazard Analysis between Lane 0 (Older) and Lane 1 (Younger)
+  // --------------------------------------------------------------------------
+  // RAW Hazard Check: Lane 1 reads a destination register being produced by Lane 0
   wire raw_hazard = id1_valid0_i && id1_valid1_i && (id1_rd0_i != 5'd0) &&
                     ((id1_rs1_1_i == id1_rd0_i) || (id1_rs2_1_i == id1_rd0_i));
 
+  // WAW Hazard Check: Lane 0 and Lane 1 write to the same destination register
+  wire waw_hazard = id1_valid0_i && id1_valid1_i && (id1_rd0_i != 5'd0) &&
+                    (id1_rd0_i == id1_rd1_i);
+
+  // MEM -> INT Load-to-Use Dependency Check:
+  // Lane 0 is MEM (Load) and Lane 1 (INT) reads rd0 as rs1 or rs2.
+  // Because MEM latency is 2 cycles (address gen + L1D cache access), dual-issuing
+  // [MEM, INT] when INT uses MEM's result would force INT to stall inside the EX stage.
+  // Implementing an intra-EX stall path and dedicated cross-EU forwarding multiplexer
+  // from L1D output to ALU input adds heavy wiring congestion and timing overhead at 1.5 GHz.
+  // Therefore, this dependency is strictly resolved by prohibiting dual-issue at ID2:
+  // Lane 0 is issued as a single instruction, Lane 1 receives a bubble (valid=0),
+  // and INT is issued on the following cycle. This completely eliminates EX stall wires.
+  wire mem_to_int_raw_hazard = id1_valid0_i && id1_valid1_i &&
+                               (id1_type0_i == 2'b10) && (id1_type1_i == 2'b01) &&
+                               (id1_rd0_i != 5'd0) &&
+                               ((id1_rs1_1_i == id1_rd0_i) || (id1_rs2_1_i == id1_rd0_i));
+
   // Dual-Issue Eligibility Checking:
-  // Strictly prevented if Lane 0 is a Branch, Jump, or System/Privileged instruction
+  // Strictly prevented if Lane 0 is a Branch, Jump, or System/Privileged instruction,
+  // or if there is any RAW/WAW hazard or MEM->INT dependency.
   wire can_dual_int_ma = id1_valid0_i && id1_valid1_i &&
                          (id1_type0_i == 2'b01) && (id1_type1_i == 2'b10) &&
                          (id1_sys_op0_i == `SYS_NONE) &&
                          (id1_br_type0_i == `BR_NONE) &&
                          (id1_jump_type0_i == `JUMP_NONE) &&
-                         !raw_hazard && !ma_eu_busy_i;
+                         !raw_hazard && !waw_hazard && !ma_eu_busy_i;
 
   wire can_dual_ma_int = id1_valid0_i && id1_valid1_i &&
                          (id1_type0_i == 2'b10) && (id1_type1_i == 2'b01) &&
                          (id1_sys_op0_i == `SYS_NONE) &&
                          (id1_br_type0_i == `BR_NONE) &&
                          (id1_jump_type0_i == `JUMP_NONE) &&
-                         !raw_hazard && !ma_eu_busy_i;
+                         !raw_hazard && !waw_hazard && !mem_to_int_raw_hazard && !ma_eu_busy_i;
 
   wire dual_issue_success = 1'b0;
 

@@ -240,10 +240,9 @@ module sukuna_l2_cache #(
         end
 
         S_EVICT: begin
-          mem_req_valid_o <= 1'b1;
-          mem_req_write_o <= 1'b1;
           if (mem_req_ready_i) begin
             // Eviction accepted, now issue refill read
+            mem_req_valid_o   <= 1'b1;
             mem_req_write_o   <= 1'b0;
             mem_req_paddr_w_o <= {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000};
             state_q           <= S_REFILL;
@@ -251,8 +250,9 @@ module sukuna_l2_cache #(
         end
 
         S_REFILL: begin
-          mem_req_valid_o <= 1'b1;
-          mem_req_write_o <= 1'b0;
+          if (mem_req_ready_i) begin
+            mem_req_valid_o <= 1'b0;
+          end
           if (mem_resp_valid_i) begin
             mem_req_valid_o <= 1'b0;
             way_valid_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] <= 1'b1;

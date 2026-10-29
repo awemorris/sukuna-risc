@@ -50,6 +50,7 @@ module sukuna_thread_pipe #(
   // L1I Cache Interface
   // --------------------------------------------------------------------------
   output wire                       l1i_req_valid_o,
+  output wire                       l1i_stall_o,
   output wire [PADDR_WIDTH-1:2]     l1i_paddr_w_o,
   input  wire                       l1i_resp_valid_i,
   input  wire [63:0]                l1i_inst_i,
@@ -100,7 +101,8 @@ module sukuna_thread_pipe #(
   // --------------------------------------------------------------------------
   // Hazard & Stall Wires
   // --------------------------------------------------------------------------
-  wire stall_if1, stall_if2, stall_id1, stall_id2, stall_id3, stall_ex;
+  wire stall_l1i, stall_if1, stall_if2, stall_id1, stall_id2, stall_id3, stall_ex;
+  assign l1i_stall_o = stall_l1i || wfi_sleep;
   wire flush_if1, flush_if2, flush_id1, flush_id2, flush_id3, flush_ex;
   wire ex_stall;
   wire [1:0] fetch_step;
@@ -357,13 +359,13 @@ module sukuna_thread_pipe #(
   ) u_regfile (
     .clk_i          (clk_i),
     .rst_ni         (rst_ni),
-    .raddr_s0_rs1_i (rf_raddr_l0_rs1),
+    .raddr_s0_rs1_i (id2_rs1_0),
     .rdata_s0_rs1_o (rf_rdata_l0_rs1),
-    .raddr_s0_rs2_i (rf_raddr_l0_rs2),
+    .raddr_s0_rs2_i (id2_rs2_0),
     .rdata_s0_rs2_o (rf_rdata_l0_rs2),
-    .raddr_s1_rs1_i (rf_raddr_l1_rs1),
+    .raddr_s1_rs1_i (id2_rs1_1),
     .rdata_s1_rs1_o (rf_rdata_l1_rs1),
-    .raddr_s1_rs2_i (rf_raddr_l1_rs2),
+    .raddr_s1_rs2_i (id2_rs2_1),
     .rdata_s1_rs2_o (rf_rdata_l1_rs2),
     .wen_p0_i       (rf_wen_p0),
     .waddr_p0_i     (rf_waddr_p0),
@@ -721,6 +723,7 @@ module sukuna_thread_pipe #(
     .id1_rs2_l1_i       (id1_rs2_1),
     .branch_mispredict_i(branch_mispredict),
     .trap_flush_i       (trap_flush),
+    .stall_l1i_o        (stall_l1i),
     .stall_if1_o        (stall_if1),
     .stall_if2_o        (stall_if2),
     .stall_id1_o        (stall_id1),

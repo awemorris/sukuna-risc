@@ -53,6 +53,7 @@ module sukuna_core #(
 
   // L1I lines (word-aligned)
   wire [NUM_HARTS-1:0]                 l1i_req_valid;
+  wire [NUM_HARTS-1:0]                 l1i_stall;
   wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0] l1i_paddr_w;
   wire [NUM_HARTS-1:0]                 l1i_resp_valid;
   wire [NUM_HARTS*64-1:0]              l1i_inst;
@@ -127,6 +128,7 @@ module sukuna_core #(
         .itlb_fault_i       (itlb_fault[h]),
 
         .l1i_req_valid_o    (l1i_req_valid[h]),
+        .l1i_stall_o        (l1i_stall[h]),
         .l1i_paddr_w_o      (l1i_paddr_w[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .l1i_resp_valid_i   (l1i_resp_valid[h]),
         .l1i_inst_i         (l1i_inst[h*64 +: 64]),
@@ -225,6 +227,7 @@ module sukuna_core #(
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
     .fetch_req_valid_i  (l1i_req_valid),
+    .fetch_stall_i      (l1i_stall),
     .fetch_paddr_w_i    (l1i_paddr_w),
     .fetch_resp_valid_o (l1i_resp_valid),
     .fetch_inst_o       (l1i_inst),

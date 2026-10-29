@@ -85,7 +85,9 @@ module sukuna_int_eu #(
                           (alu_op_i == `ALU_SRL) ? 2'b01 : 2'b10;
 
   wire [5:0] effective_shamt = is_word_i ? {1'b0, src2_i[4:0]} : src2_i[5:0];
-  wire [XLEN-1:0] shift_operand = is_word_i ? {{32{src1_i[31]}}, src1_i[31:0]} : src1_i;
+  wire [XLEN-1:0] shift_operand = is_word_i ?
+                                  ((alu_op_i == `ALU_SRA) ? {{32{src1_i[31]}}, src1_i[31:0]} :
+                                                            {32'd0, src1_i[31:0]}) : src1_i;
   wire [XLEN-1:0] shift_res;
 
   sk_shift #(

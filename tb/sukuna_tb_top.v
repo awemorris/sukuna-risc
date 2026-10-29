@@ -123,7 +123,7 @@ module sukuna_tb_top;
   // AXI4 Simulation Memory Instantiation
   // --------------------------------------------------------------------------
   sukuna_axi_mem #(
-    .MEM_SIZE_BYTES(65536),
+    .MEM_SIZE_BYTES(262144),
     .BASE_ADDR     (64'h0000_0000_8000_0000)
   ) u_mem (
     .clk_i        (clk),
@@ -237,8 +237,8 @@ module sukuna_tb_top;
   wire trap_valid = dut.u_core.gen_threads[0].u_thread.u_wb.trap_valid_o;
   wire [5:0] trap_cause = dut.u_core.gen_threads[0].u_thread.u_wb.trap_cause_o;
   wire [63:0] trap_pc = dut.u_core.gen_threads[0].u_thread.u_wb.trap_pc_o;
-  wire [63:0] gpr_a0 = dut.u_core.gen_threads[0].u_thread.u_regfile.u_bank0.mem[10];
   wire [63:0] gpr_gp = dut.u_core.gen_threads[0].u_thread.u_regfile.u_bank0.mem[3];
+  wire [63:0] gpr_a0 = dut.u_core.gen_threads[0].u_thread.u_regfile.u_bank0.mem[10];
 
   always @(posedge clk) begin
     if (rst_n) begin

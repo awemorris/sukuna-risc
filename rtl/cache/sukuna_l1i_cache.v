@@ -20,6 +20,7 @@ module sukuna_l1i_cache #(
 )(
   input  wire                       clk_i,
   input  wire                       rst_ni,
+  input  wire                       stall_i,
 
   // Fetch Pipeline Interface (Word-aligned address: lower 2 bits truncated)
   input  wire                       fetch_req_valid_i,
@@ -74,23 +75,38 @@ module sukuna_l1i_cache #(
   reg [INDEX_BITS-1:0]   req_index_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [TAG_WIDTH-1:0]    req_tag_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]  req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [CACHE_LINE_BITS-1:0] refill_hold_data_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                    refill_hold_valid_q;/* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // Per-way valid bit register array (resets to 0)
   reg [SETS-1:0]         way_valid_q [0:WAYS-1];
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      req_valid_q   <= 1'b0;
-      req_offset_q  <= 4'd0;
-      req_index_q   <= {INDEX_BITS{1'b0}};
-      req_tag_q     <= {TAG_WIDTH{1'b0}};
-      req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
-    end else if (!fetch_miss_o) begin
-      req_valid_q   <= fetch_req_valid_i;
-      req_offset_q  <= req_word_offset;
-      req_index_q   <= req_index;
-      req_tag_q     <= req_tag;
-      req_paddr_w_q <= fetch_paddr_w_i;
+      req_valid_q         <= 1'b0;
+      req_offset_q        <= 4'd0;
+      req_index_q         <= {INDEX_BITS{1'b0}};
+      req_tag_q           <= {TAG_WIDTH{1'b0}};
+      req_paddr_w_q       <= {(PADDR_WIDTH-2){1'b0}};
+      refill_hold_data_q  <= {CACHE_LINE_BITS{1'b0}};
+      refill_hold_valid_q <= 1'b0;
+    end else begin
+      if (refill_resp_valid_i) begin
+        if (stall_i) begin
+          refill_hold_data_q  <= refill_line_data_i;
+          refill_hold_valid_q <= 1'b1;
+        end
+      end else if (!stall_i) begin
+        refill_hold_valid_q <= 1'b0;
+      end
+
+      if (!fetch_miss_o && !stall_i) begin
+        req_valid_q   <= fetch_req_valid_i;
+        req_offset_q  <= req_word_offset;
+        req_index_q   <= req_index;
+        req_tag_q     <= req_tag;
+        req_paddr_w_q <= fetch_paddr_w_i;
+      end
     end
   end
 
@@ -129,7 +145,7 @@ module sukuna_l1i_cache #(
         .wstrb_i(1'b1),
         .waddr_i(way_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index),
         .wdata_i(fence_i_flush_i ? {(TAG_WIDTH+1){1'b0}} : {1'b1, req_tag_q}),
-        .ren_i  (fetch_req_valid_i),
+        .ren_i  (fetch_req_valid_i && !stall_i),
         .raddr_i(req_index),
         .rdata_o(tag_rdata[w])
       );
@@ -148,7 +164,7 @@ module sukuna_l1i_cache #(
         .wstrb_i(1'b1),
         .waddr_i(req_paddr_w_q[5+INDEX_BITS:6]),
         .wdata_i(refill_line_data_i),
-        .ren_i  (fetch_req_valid_i),
+        .ren_i  (fetch_req_valid_i && !stall_i),
         .raddr_i(req_index),
         .rdata_o(data_rdata[w])
       );
@@ -173,7 +189,9 @@ module sukuna_l1i_cache #(
     end
   end
 
-  wire [CACHE_LINE_BITS-1:0] eff_line_data = refill_resp_valid_i ? refill_line_data_i : hit_line_data;
+  wire [CACHE_LINE_BITS-1:0] eff_line_data = refill_resp_valid_i ? refill_line_data_i :
+                                             refill_hold_valid_q  ? refill_hold_data_q :
+                                             hit_line_data;
 
   // Extract 64-bit instruction block (inst0, inst1) based on 32-bit word offset [5:2]
   wire [31:0] line_words32 [0:15];
@@ -188,13 +206,13 @@ module sukuna_l1i_cache #(
   wire [31:0] fetch_word1 = (req_offset_q == 4'd15) ? 32'h00000013 : line_words32[req_offset_q + 4'd1];
 
   assign fetch_inst_o       = {fetch_word1, fetch_word0};
-  assign fetch_resp_valid_o = (hit && !miss_busy_q) || refill_resp_valid_i;
-  assign fetch_miss_o       = ((req_valid_q && !hit) || miss_busy_q) && !refill_resp_valid_i;
+  assign fetch_resp_valid_o = (hit && !miss_busy_q) || refill_resp_valid_i || refill_hold_valid_q;
+  assign fetch_miss_o       = ((req_valid_q && !hit) || miss_busy_q) && !refill_resp_valid_i && !refill_hold_valid_q;
 
   // --------------------------------------------------------------------------
   // Refill State Control & Replacement
   // --------------------------------------------------------------------------
-  assign refill_req_valid_o    = req_valid_q && !hit && !miss_busy_q;
+  assign refill_req_valid_o    = req_valid_q && !hit && !miss_busy_q && !refill_hold_valid_q;
   assign refill_line_paddr_w_o = {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000}; // Line aligned
 
   integer wy;

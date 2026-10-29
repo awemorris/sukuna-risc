@@ -116,6 +116,8 @@ module sukuna_l1d_cache #(
       req_tag_q     <= req_tag;
       req_paddr_w_q <= mem_paddr_w_i;
       req_wdata_q   <= mem_wdata_i;
+    end else if (state_q == S_REFILL && l2_resp_valid_i) begin
+      req_valid_q   <= 1'b0;
     end
   end
 
@@ -130,6 +132,19 @@ module sukuna_l1d_cache #(
   wire [INDEX_BITS-1:0] snoop_index = snoop_paddr_w_i[5+INDEX_BITS:6];
   wire [TAG_WIDTH-1:0]  snoop_tag   = snoop_paddr_w_i[PADDR_WIDTH-1:6+INDEX_BITS];
   wire [WAYS-1:0]       snoop_way_hit;
+
+  reg [CACHE_LINE_BITS-1:0] refill_wdata;
+  integer bi;
+  always @(*) begin
+    refill_wdata = l2_rline_data_i;
+    if (req_write_q) begin
+      for (bi = 0; bi < 8; bi = bi + 1) begin
+        if (req_byte_en_q[bi]) begin
+          refill_wdata[(req_offset_q[3:1]*64 + bi*8) +: 8] = req_wdata_q[bi*8 +: 8];
+        end
+      end
+    end
+  end
 
   genvar w;
   generate
@@ -173,7 +188,7 @@ module sukuna_l1d_cache #(
         .wen_i  (way_refill_wen || way_write_hit),
         .wstrb_i(way_refill_wen ? {64{1'b1}} : {56'd0, req_byte_en_q} << (req_offset_q[3:1] * 8)),
         .waddr_i(way_refill_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_paddr_w_q[5+INDEX_BITS:6]),
-        .wdata_i(way_refill_wen ? l2_rline_data_i : {8{req_wdata_q}}),
+        .wdata_i(way_refill_wen ? refill_wdata : {8{req_wdata_q}}),
         .ren_i  (mem_req_valid_i),
         .raddr_i(req_index),
         .rdata_o(data_rdata[w])
@@ -202,7 +217,7 @@ module sukuna_l1d_cache #(
   end
 
   wire refill_done = (state_q == S_REFILL) && l2_resp_valid_i;
-  wire [CACHE_LINE_BITS-1:0] eff_line_data = refill_done ? l2_rline_data_i : hit_line_data;
+  wire [CACHE_LINE_BITS-1:0] eff_line_data = refill_done ? refill_wdata : hit_line_data;
 
   wire [XLEN-1:0] line_dword [0:7];
   genvar di;
@@ -213,7 +228,7 @@ module sukuna_l1d_cache #(
   endgenerate
 
   assign mem_req_ready_o  = !is_busy;
-  assign mem_resp_valid_o = (hit && !is_busy) || (refill_done && !req_write_q);
+  assign mem_resp_valid_o = (hit && !is_busy) || refill_done;
   assign mem_rdata_o      = line_dword[req_offset_q[3:1]];
   assign mem_miss_stall_o = ((req_valid_q && !hit) || is_busy) && !refill_done;
 

@@ -48,11 +48,11 @@ module sukuna_stage_if1 #(
   wire [31:0] _unused_hart = HART_ID;
 
   // Request virtual address to ITLB (word-aligned)
-  assign itlb_req_valid_o = !stall_i;
+  assign itlb_req_valid_o = !flush_i;
   assign itlb_vaddr_w_o   = pc_q[VADDR_WIDTH-1:2];
 
   // Physical address request to L1I (Word-aligned)
-  assign l1i_req_valid_o  = itlb_hit_i && !stall_i;
+  assign l1i_req_valid_o  = itlb_hit_i && !flush_i;
   assign l1i_paddr_w_o    = itlb_paddr_w_i;
 
   // Next PC calculation

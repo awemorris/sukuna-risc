@@ -101,6 +101,11 @@ module sukuna_stage_id1 #(
   wire is_auipc0  = (op0 == 7'b0010111);
   wire is_sys0    = (op0 == 7'b1110011);
   wire is_fp0     = (op0 == 7'b1010011);
+  wire is_fence0  = (op0 == 7'b0001111);
+
+  wire l0_writes_rd = is_op0 || is_op_imm0 || is_op32_0 || is_opi32_0 ||
+                      is_load0 || is_lui0 || is_auipc0 || is_jal0 || is_jalr0 ||
+                      (is_sys0 && (funct3_0 != 3'b000));
 
   // Immediate Formats for Lane 0
   wire [XLEN-1:0] imm_i0 = {{52{if2_inst0_i[31]}}, if2_inst0_i[31:20]};
@@ -192,8 +197,8 @@ module sukuna_stage_id1 #(
   wire [1:0] jump_type0 = is_jal0  ? `JUMP_JAL :
                           is_jalr0 ? `JUMP_JALR : `JUMP_NONE;
 
-  // Single-issue requirement: Branches, Jumps, and System ops force type = NONE
-  wire single_issue_l0 = is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE);
+  // Single-issue requirement: Branches, Jumps, System ops, and Fence force type = NONE
+  wire single_issue_l0 = is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || is_fence0;
 
   // ==========================================================================
   // Lane 1 Instruction Decode
@@ -211,6 +216,10 @@ module sukuna_stage_id1 #(
   wire is_lui1    = (op1 == 7'b0110111);
   wire is_auipc1  = (op1 == 7'b0010111);
   wire is_fp1     = (op1 == 7'b1010011);
+  wire is_fence1  = (op1 == 7'b0001111);
+
+  wire l1_writes_rd = is_op1 || is_op_imm1 || is_op32_1 || is_opi32_1 ||
+                      is_load1 || is_lui1 || is_auipc1;
 
   // Immediate Formats for Lane 1
   wire [XLEN-1:0] imm_i1 = {{52{if2_inst1_i[31]}}, if2_inst1_i[31:20]};
@@ -316,7 +325,7 @@ module sukuna_stage_id1 #(
         id1_type0_o       <= single_issue_l0 ? 2'b00 :
                              (is_load0 || is_store0) ? 2'b10 :
                              is_fp0 ? 2'b11 : 2'b01;
-        id1_rd0_o         <= if2_inst0_i[11:7];
+        id1_rd0_o         <= l0_writes_rd ? if2_inst0_i[11:7] : 5'd0;
         id1_rs1_0_o       <= if2_inst0_i[19:15];
         id1_rs2_0_o       <= if2_inst0_i[24:20];
         id1_imm0_o        <= imm_l0;
@@ -337,7 +346,7 @@ module sukuna_stage_id1 #(
         id1_pc1_o         <= if2_pc1_i;
         id1_inst1_o       <= if2_inst1_i;
         id1_type1_o       <= (is_load1 || is_store1) ? 2'b10 : is_fp1 ? 2'b11 : 2'b01;
-        id1_rd1_o         <= if2_inst1_i[11:7];
+        id1_rd1_o         <= l1_writes_rd ? if2_inst1_i[11:7] : 5'd0;
         id1_rs1_1_o       <= if2_inst1_i[19:15];
         id1_rs2_1_o       <= if2_inst1_i[24:20];
         id1_imm1_o        <= imm_l1;

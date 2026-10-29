@@ -33,6 +33,7 @@ module sukuna_hazard_unit (
   input  wire       trap_flush_i,
 
   // Stall outputs to pipeline stages (Hold)
+  output wire       stall_l1i_o,
   output wire       stall_if1_o,
   output wire       stall_if2_o,
   output wire       stall_id1_o,
@@ -57,8 +58,9 @@ module sukuna_hazard_unit (
   // Global Stall: EX memory stall or Shared EU wait freezes all upstream stages
   wire upstream_freeze = ex_stall_i || shared_eu_stall_i;
 
+  assign stall_l1i_o = upstream_freeze || load_use_hazard;
   assign stall_if1_o = upstream_freeze || l1i_miss_i || load_use_hazard;
-  assign stall_if2_o = upstream_freeze || l1i_miss_i || load_use_hazard;
+  assign stall_if2_o = upstream_freeze || load_use_hazard;
   assign stall_id1_o = upstream_freeze || load_use_hazard;
   assign stall_id2_o = upstream_freeze;
   assign stall_id3_o = upstream_freeze;
