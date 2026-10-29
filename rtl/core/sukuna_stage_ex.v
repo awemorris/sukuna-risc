@@ -79,6 +79,13 @@ module sukuna_stage_ex #(
   input  wire                   ma_en_l0_i,
   input  wire                   ma_en_l1_i,
 
+  // Floating-Point Register File Inputs
+  input  wire [XLEN-1:0]        fpr_src1_i,
+  input  wire [XLEN-1:0]        fpr_src2_i,
+  input  wire                   wb_fpr_wen_i,
+  input  wire [4:0]             wb_fpr_rd_i,
+  input  wire [XLEN-1:0]        wb_fpr_data_i,
+
   // CSR Unit Read / Legality Interface (Lane 0 EX stage)
   output wire                   csr_req_valid_o,
   output wire [11:0]            csr_raddr_o,
@@ -128,6 +135,8 @@ module sukuna_stage_ex #(
   output wire                   ex_wb_l0_sret_o,
   output wire                   ex_wb_l0_wfi_o,
   output wire                   ex_wb_l0_sfence_o,
+  output wire                   ex_wb_l0_fence_i_o,
+  output wire                   ex_wb_l0_writes_fpr_o,
 
   // Output to WB Stage: Lane 1
   output wire                   ex_wb_l1_valid_o,
@@ -167,6 +176,35 @@ module sukuna_stage_ex #(
                                 (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l1_rs2_i))             ? wb_l1_data_i   :
                                 l1_src2_i;
 
+  // Floating-Point Register File Forwarding
+  wire [XLEN-1:0] fwd_fpr_src1 = (ex_wb_l0_writes_fpr_o && (ex_wb_l0_rd_o == l0_rs1_i)) ? ex_wb_l0_data_o :
+                                 (wb_fpr_wen_i && (wb_fpr_rd_i == l0_rs1_i))             ? wb_fpr_data_i   :
+                                 fpr_src1_i;
+  wire [XLEN-1:0] fwd_fpr_src2 = (ex_wb_l0_writes_fpr_o && (ex_wb_l0_rd_o == l0_rs2_i)) ? ex_wb_l0_data_o :
+                                 (wb_fpr_wen_i && (wb_fpr_rd_i == l0_rs2_i))             ? wb_fpr_data_i   :
+                                 fpr_src2_i;
+
+  // Floating-Point Execution Unit
+  wire is_fp_op    = l0_valid_i && (l0_alu_op_i == `ALU_FP);
+  wire is_fp_load  = l0_valid_i && (l0_mem_op_i[7:4] == `AMO_FP) && !l0_mem_op_i[3];
+  wire is_fp_store = l0_valid_i && (l0_mem_op_i[7:4] == `AMO_FP) && l0_mem_op_i[3];
+
+  wire [XLEN-1:0] fp_unit_res;
+  wire            fp_unit_writes_fpr;
+  wire            fp_unit_writes_gpr;
+
+  sukuna_fp_unit #(.XLEN(XLEN)) u_fp_unit (
+    .funct7_i   (l0_csr_addr_i[11:5]),
+    .funct3_i   (l0_mem_op_i[2:0]),
+    .rs2_field_i(l0_rs2_i),
+    .fpr_src1_i (fwd_fpr_src1),
+    .fpr_src2_i (fwd_fpr_src2),
+    .gpr_src1_i (fwd_l0_src1),
+    .fp_result_o(fp_unit_res),
+    .writes_fpr_o(fp_unit_writes_fpr),
+    .writes_gpr_o(fp_unit_writes_gpr)
+  );
+
   // --------------------------------------------------------------------------
   // CSR & Privileged Instruction Evaluation (Lane 0 only)
   // --------------------------------------------------------------------------
@@ -194,6 +232,7 @@ module sukuna_stage_ex #(
   wire is_sret    = is_priv_op && (l0_priv_op_i == `PRIV_SRET);
   wire is_wfi     = is_priv_op && (l0_priv_op_i == `PRIV_WFI);
   wire is_sfence  = is_priv_op && (l0_priv_op_i == `PRIV_SFENCE_VMA);
+  wire is_fence_i = is_priv_op && (l0_priv_op_i == `PRIV_FENCE_I);
 
   wire illegal_mret = is_mret && (priv_mode_i < 2'b11);
   wire illegal_sret = is_sret && (priv_mode_i < 2'b01);
@@ -311,7 +350,7 @@ module sukuna_stage_ex #(
   wire [4:0]      ma_rd     = ma_en_l0_i ? l0_rd_i     : l1_rd_i;
   wire [XLEN-1:0] ma_base   = ma_en_l0_i ? fwd_l0_src1 : fwd_l1_src1;
   wire [XLEN-1:0] ma_offset = ma_en_l0_i ? l0_imm_i    : l1_imm_i;
-  wire [XLEN-1:0] ma_wdata  = ma_en_l0_i ? fwd_l0_src2 : fwd_l1_src2;
+  wire [XLEN-1:0] ma_wdata  = ma_en_l0_i ? (is_fp_store ? fwd_fpr_src2 : fwd_l0_src2) : fwd_l1_src2;
 
   wire ma_busy;
   wire ma_out_valid;
@@ -377,6 +416,12 @@ module sukuna_stage_ex #(
   reg              sys_sret_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              sys_wfi_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              sys_sfence_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              sys_fence_i_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              is_fp_load_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              is_fp_op_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              fp_writes_fpr_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              is_fp_flw_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   fp_res_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   reg [XLEN-1:0]   l0_pc_q;         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]   l1_pc_q;         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -402,6 +447,12 @@ module sukuna_stage_ex #(
       sys_sret_q      <= 1'b0;
       sys_wfi_q       <= 1'b0;
       sys_sfence_q    <= 1'b0;
+      sys_fence_i_q   <= 1'b0;
+      is_fp_load_q    <= 1'b0;
+      is_fp_op_q      <= 1'b0;
+      fp_writes_fpr_q <= 1'b0;
+      is_fp_flw_q     <= 1'b0;
+      fp_res_q        <= {XLEN{1'b0}};
       l0_pc_q         <= {XLEN{1'b0}};
       l1_pc_q         <= {XLEN{1'b0}};
       l0_tval_q       <= {XLEN{1'b0}};
@@ -420,6 +471,12 @@ module sukuna_stage_ex #(
         sys_sret_q      <= 1'b0;
         sys_wfi_q       <= 1'b0;
         sys_sfence_q    <= 1'b0;
+        sys_fence_i_q   <= 1'b0;
+        is_fp_load_q    <= 1'b0;
+        is_fp_op_q      <= 1'b0;
+        fp_writes_fpr_q <= 1'b0;
+        is_fp_flw_q     <= 1'b0;
+        fp_res_q        <= {XLEN{1'b0}};
       end else if (!stall_i) begin
         ex_l0_valid_q   <= l0_valid_i;
         ex_l1_valid_q   <= l1_valid_i && !branch_mispredict_o;
@@ -438,6 +495,12 @@ module sukuna_stage_ex #(
         sys_sret_q      <= is_sret && !illegal_sret;
         sys_wfi_q       <= is_wfi;
         sys_sfence_q    <= is_sfence;
+        sys_fence_i_q   <= is_fence_i;
+        is_fp_load_q    <= is_fp_load;
+        is_fp_op_q      <= is_fp_op;
+        fp_writes_fpr_q <= fp_unit_writes_fpr;
+        fp_res_q        <= fp_unit_res;
+        is_fp_flw_q     <= is_fp_load && (l0_mem_op_i[2:0] == 3'b010);
         l0_pc_q         <= l0_pc_i;
         l1_pc_q         <= l1_pc_i;
         l0_tval_q       <= l0_pc_i;
@@ -455,7 +518,10 @@ module sukuna_stage_ex #(
   assign ex_wb_l0_rd_o        = sys_was_l0_q ? sys_rd_q :
                                 int_was_l0_q ? int_out_rd : ma_out_rd;
   assign ex_wb_l0_data_o      = sys_was_l0_q ? sys_rdata_q :
-                                int_was_l0_q ? int_out_result : ma_out_rdata;
+                                is_fp_op_q   ? fp_res_q :
+                                int_was_l0_q ? int_out_result :
+                                is_fp_flw_q  ? {32'hFFFFFFFF, ma_out_rdata[31:0]} :
+                                ma_out_rdata;
   assign ex_wb_l0_exc_o       = sys_was_l0_q ? sys_exc_q :
                                 (!int_was_l0_q && dtlb_fault_i);
   assign ex_wb_l0_cause_o     = sys_was_l0_q ? sys_cause_q : `EXC_LOAD_PAGE_FAULT;
@@ -468,6 +534,8 @@ module sukuna_stage_ex #(
   assign ex_wb_l0_sret_o      = sys_was_l0_q && sys_sret_q;
   assign ex_wb_l0_wfi_o       = sys_was_l0_q && sys_wfi_q;
   assign ex_wb_l0_sfence_o    = sys_was_l0_q && sys_sfence_q;
+  assign ex_wb_l0_fence_i_o   = sys_was_l0_q && sys_fence_i_q;
+  assign ex_wb_l0_writes_fpr_o= is_fp_load_q || (is_fp_op_q && fp_writes_fpr_q);
 
   assign ex_wb_l1_valid_o     = ex_l1_valid_q && ((!int_was_l0_q) ? int_out_valid : ma_out_valid);
   assign ex_wb_l1_pc_o        = l1_pc_q;

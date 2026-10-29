@@ -20,7 +20,7 @@ def run_test(test_s, extra_cflags="", max_cycles=20000):
     hex_file = f"{BUILD_DIR}/{test_name}.hex"
 
     # 1. Compile
-    default_march = "rv64gc" if "rvc" in test_name or "rv64uc" in test_name else "rv64imafd"
+    default_march = "rv64imafd_zicsr_zifencei" if "rv64ui" in test_name else "rv64gc"
     cflags = f"-march={default_march} -mabi=lp64 -static -fno-pic -fno-pie -nostdlib -nostartfiles -T {LINKER_SCRIPT} -I{ISA_DIR} {extra_cflags}"
     cmd_compile = f"{CC} {cflags} {test_s} -o {elf_file}"
     res = subprocess.run(cmd_compile, shell=True, capture_output=True, text=True)

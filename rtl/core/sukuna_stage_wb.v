@@ -34,6 +34,8 @@ module sukuna_stage_wb #(
   input  wire             l0_sret_i,
   input  wire             l0_wfi_i,
   input  wire             l0_sfence_i,
+  input  wire             l0_fence_i_i,
+  input  wire             l0_writes_fpr_i,
 
   // Lane 1 Result from EX (younger)
   input  wire             l1_valid_i,
@@ -77,7 +79,13 @@ module sukuna_stage_wb #(
   output wire             mret_valid_o,
   output wire             sret_valid_o,
   output wire             wfi_valid_o,
-  output wire             sfence_valid_o
+  output wire             sfence_valid_o,
+  output wire             fence_i_valid_o,
+
+  // FPR Commit
+  output wire             fpr_wen_o,
+  output wire [4:0]       fpr_waddr_o,
+  output wire [XLEN-1:0]  fpr_wdata_o
 );
 
   wire _unused = &{1'b0, clk_i, rst_ni, 1'b0};
@@ -86,10 +94,15 @@ module sukuna_stage_wb #(
   wire lane0_has_trap = l0_valid_i && l0_exc_i;
   wire lane1_has_trap = l1_valid_i && l1_exc_i;
 
-  // Port 0: Lane 0 Commit
-  assign rf_wen_p0_o   = l0_valid_i && !l0_exc_i && (l0_rd_i != 5'd0);
+  // Port 0: Lane 0 Commit (suppressed if instruction wrote to FPR)
+  assign rf_wen_p0_o   = l0_valid_i && !l0_exc_i && !l0_writes_fpr_i && (l0_rd_i != 5'd0);
   assign rf_waddr_p0_o = l0_rd_i;
   assign rf_wdata_p0_o = l0_data_i;
+
+  // FPR Commit
+  assign fpr_wen_o     = l0_valid_i && !l0_exc_i && l0_writes_fpr_i;
+  assign fpr_waddr_o   = l0_rd_i;
+  assign fpr_wdata_o   = l0_data_i;
 
   // Port 1: Lane 1 Commit (Squashed if Lane 0 trapped)
   assign rf_wen_p1_o   = l1_valid_i && !lane0_has_trap && !l1_exc_i && (l1_rd_i != 5'd0);
@@ -110,7 +123,8 @@ module sukuna_stage_wb #(
   assign mret_valid_o   = l0_valid_i && !l0_exc_i && l0_mret_i;
   assign sret_valid_o   = l0_valid_i && !l0_exc_i && l0_sret_i;
   assign wfi_valid_o    = l0_valid_i && !l0_exc_i && l0_wfi_i;
-  assign sfence_valid_o = l0_valid_i && !l0_exc_i && l0_sfence_i;
+  assign sfence_valid_o  = l0_valid_i && !l0_exc_i && l0_sfence_i;
+  assign fence_i_valid_o = l0_valid_i && !l0_exc_i && l0_fence_i_i;
 
   // Trap generation
   assign trap_valid_o  = lane0_has_trap || lane1_has_trap;

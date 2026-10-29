@@ -55,6 +55,7 @@ module sukuna_csr_unit #(
   input  wire                   sret_valid_i,
   input  wire                   wfi_valid_i,
   input  wire                   sfence_valid_i,
+  input  wire                   fence_i_valid_i,
 
   // --------------------------------------------------------------------------
   // Control outputs to Frontend / MMU / Pipeline
@@ -94,6 +95,9 @@ module sukuna_csr_unit #(
 
   // Software interrupt pending bit for S-mode
   reg ssip_q;               /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  // Floating-point CSR storage (fcsr, frm, fflags)
+  reg [7:0] fcsr_q;         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // --------------------------------------------------------------------------
   // MIP & MIE Bitmap Definitions
@@ -136,6 +140,7 @@ module sukuna_csr_unit #(
   reg csr_exists;
   always @(*) begin
     case (csr_raddr_i)
+      12'h001, 12'h002, 12'h003,
       12'h300, 12'h301, 12'h302, 12'h303, 12'h304, 12'h305,
       12'h340, 12'h341, 12'h342, 12'h343, 12'h344, 12'hF14,
       12'h100, 12'h104, 12'h105, 12'h140, 12'h141, 12'h142,
@@ -151,6 +156,11 @@ module sukuna_csr_unit #(
   // --------------------------------------------------------------------------
   always @(*) begin
     case (csr_raddr_i)
+      // Floating-Point CSRs
+      12'h001: csr_rdata_o = {{(XLEN-5){1'b0}}, fcsr_q[4:0]}; // fflags
+      12'h002: csr_rdata_o = {{(XLEN-3){1'b0}}, fcsr_q[7:5]}; // frm
+      12'h003: csr_rdata_o = {{(XLEN-8){1'b0}}, fcsr_q[7:0]}; // fcsr
+
       // Machine-mode CSRs
       12'h300: csr_rdata_o = mstatus_q;
       12'h301: csr_rdata_o = 64'h80000000_0014112D; // RV64IMAFDCSU
@@ -190,7 +200,7 @@ module sukuna_csr_unit #(
                    (is_interrupt_trap ? mideleg_q[trap_code] : medeleg_q[trap_code]);
 
   assign trap_flush_o   = exception_valid_i || mret_valid_i || sret_valid_i ||
-                          sfence_valid_i    || (csr_commit_wen_i && (csr_commit_addr_i == 12'h180));
+                          sfence_valid_i    || fence_i_valid_i || (csr_commit_wen_i && (csr_commit_addr_i == 12'h180));
   assign sfence_flush_o = sfence_valid_i;
 
   wire [XLEN-1:0] s_trap_pc = (stvec_q[1:0] == 2'b01 && is_interrupt_trap) ?
@@ -254,11 +264,12 @@ module sukuna_csr_unit #(
       satp_o           <= {XLEN{1'b0}};
 
       ssip_q           <= 1'b0;
+      fcsr_q           <= 8'd0;
       wfi_sleep_o      <= 1'b0;
     end else begin
       // WFI sleep management
       if (wfi_valid_i) begin
-        wfi_sleep_o <= 1'b1;
+        wfi_sleep_o <= 1'b0; // RISC-V spec: WFI is a hint that can legally execute without hanging
       end else if (| (mip_wire & mie_wire)) begin
         wfi_sleep_o <= 1'b0; // Wakeup on any pending & enabled interrupt
       end
@@ -302,6 +313,9 @@ module sukuna_csr_unit #(
       // 4. CSR Write / Commit
       else if (csr_commit_wen_i) begin
         case (csr_commit_addr_i)
+          12'h001: fcsr_q[4:0] <= csr_commit_wdata_i[4:0];
+          12'h002: fcsr_q[7:5] <= csr_commit_wdata_i[2:0];
+          12'h003: fcsr_q[7:0] <= csr_commit_wdata_i[7:0];
           12'h300: begin // mstatus
             mstatus_q[3]     <= csr_commit_wdata_i[3];     // MIE
             mstatus_q[7]     <= csr_commit_wdata_i[7];     // MPIE

@@ -62,6 +62,19 @@ RVTEST_CODE_BEGIN
   li  t0, -10
   bne a1, t0, test_fail
 
+  // Test 9: LUI (Load Upper Immediate)
+  li  gp, 9
+  lui a1, 0x12345
+  li  t0, 0x12345000
+  bne a1, t0, test_fail
+
+  // Test 10: AUIPC (Add Upper Immediate to PC)
+  li  gp, 10
+1:
+  auipc a1, 0
+  la  t0, 1b
+  bne a1, t0, test_fail
+
   // All tests passed!
 test_pass:
   RVTEST_PASS

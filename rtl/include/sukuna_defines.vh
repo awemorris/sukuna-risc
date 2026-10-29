@@ -83,6 +83,7 @@
 `define ALU_DIVU          5'd15
 `define ALU_REM           5'd16
 `define ALU_REMU          5'd17
+`define ALU_FP            5'd18
 
 // Branch Operations
 `define BR_NONE           3'b000
@@ -124,6 +125,7 @@
 `define AMO_MAX           4'd9
 `define AMO_MINU          4'd10
 `define AMO_MAXU          4'd11
+`define AMO_FP            4'd12
 
 // System / CSR Operations
 `define SYS_NONE          3'b000
@@ -140,6 +142,7 @@
 `define PRIV_SRET         3'b100
 `define PRIV_WFI          3'b101
 `define PRIV_SFENCE_VMA   3'b110
+`define PRIV_FENCE_I      3'b111
 
 // Exception Causes
 `define EXC_INST_ADDR_MISALIGNED  6'd0

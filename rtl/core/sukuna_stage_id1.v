@@ -92,21 +92,26 @@ module sukuna_stage_id1 #(
   wire is_op_imm0 = (op0 == 7'b0010011);
   wire is_op32_0  = (op0 == 7'b0111011);
   wire is_opi32_0 = (op0 == 7'b0011011);
-  wire is_load0   = (op0 == 7'b0000011);
-  wire is_store0  = (op0 == 7'b0100011);
+  wire is_fp_load0  = (op0 == 7'b0000111);
+  wire is_fp_store0 = (op0 == 7'b0100111);
+  wire is_fp_op0    = (op0 == 7'b1010011);
+  wire is_load0     = (op0 == 7'b0000011) || is_fp_load0;
+  wire is_store0    = (op0 == 7'b0100011) || is_fp_store0;
   wire is_branch0 = (op0 == 7'b1100011);
   wire is_jal0    = (op0 == 7'b1101111);
   wire is_jalr0   = (op0 == 7'b1100111);
   wire is_lui0    = (op0 == 7'b0110111);
   wire is_auipc0  = (op0 == 7'b0010111);
   wire is_sys0    = (op0 == 7'b1110011);
-  wire is_fp0     = (op0 == 7'b1010011);
+  wire is_fp0     = is_fp_op0;
   wire is_fence0  = (op0 == 7'b0001111);
   wire is_amo0    = (op0 == 7'b0101111);
 
   reg [3:0] amo_type0;
   always @(*) begin
-    if (!is_amo0) begin
+    if (is_fp_load0 || is_fp_store0) begin
+      amo_type0 = `AMO_FP;
+    end else if (!is_amo0) begin
       amo_type0 = `AMO_NONE;
     end else begin
       case (funct7_0[6:2])
@@ -129,7 +134,7 @@ module sukuna_stage_id1 #(
 
   wire l0_writes_rd = is_op0 || is_op_imm0 || is_op32_0 || is_opi32_0 ||
                       is_load0 || is_lui0 || is_auipc0 || is_jal0 || is_jalr0 ||
-                      is_amo0 || (is_sys0 && (funct3_0 != 3'b000));
+                      is_amo0 || is_fp_op0 || (is_sys0 && (funct3_0 != 3'b000));
 
   // Immediate Formats for Lane 0
   wire [XLEN-1:0] imm_i0 = {{52{if2_inst0_i[31]}}, if2_inst0_i[31:20]};
@@ -149,7 +154,9 @@ module sukuna_stage_id1 #(
   // ALU Opcode for Lane 0
   reg [4:0] alu_op0_comb;
   always @(*) begin
-    if (is_lui0 || is_auipc0 || is_load0 || is_store0 || is_jal0 || is_jalr0) begin
+    if (is_fp_op0) begin
+      alu_op0_comb = `ALU_FP;
+    end else if (is_lui0 || is_auipc0 || is_load0 || is_store0 || is_jal0 || is_jalr0) begin
       alu_op0_comb = `ALU_ADD;
     end else if (is_op0 || is_op32_0) begin
       if (funct7_0 == 7'b0000001) begin // RV64M Multiplier/Divider
@@ -196,13 +203,15 @@ module sukuna_stage_id1 #(
 
   // System & Privileged Opcode Decoding
   wire [11:0] funct12_0 = if2_inst0_i[31:20];
-  wire [2:0] sys_op0 = (!is_sys0) ? `SYS_NONE :
+  wire [2:0] sys_op0 = (is_fence0 && funct3_0 == 3'b001) ? `SYS_PRIV :
+                       (!is_sys0) ? `SYS_NONE :
                        (funct3_0 == 3'b000)    ? `SYS_PRIV :
                        (funct3_0[1:0] == 2'b01) ? `SYS_CSRRW :
                        (funct3_0[1:0] == 2'b10) ? `SYS_CSRRS :
                        (funct3_0[1:0] == 2'b11) ? `SYS_CSRRC : `SYS_NONE;
 
-  wire [2:0] priv_op0 = (!is_sys0 || funct3_0 != 3'b000) ? `PRIV_NONE :
+  wire [2:0] priv_op0 = (is_fence0 && funct3_0 == 3'b001) ? `PRIV_FENCE_I :
+                        (!is_sys0 || funct3_0 != 3'b000) ? `PRIV_NONE :
                         (funct12_0 == 12'h000) ? `PRIV_ECALL :
                         (funct12_0 == 12'h001) ? `PRIV_EBREAK :
                         (funct12_0 == 12'h302) ? `PRIV_MRET :
@@ -223,7 +232,7 @@ module sukuna_stage_id1 #(
                           is_jalr0 ? `JUMP_JALR : `JUMP_NONE;
 
   // Single-issue requirement: Branches, Jumps, System ops, Fence, and AMO force single issue
-  wire single_issue_l0 = is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || is_fence0 || is_amo0;
+  wire single_issue_l0 = is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || is_fence0 || is_amo0 || is_fp_op0 || is_fp_load0 || is_fp_store0;
 
   // ==========================================================================
   // Lane 1 Instruction Decode
@@ -348,8 +357,8 @@ module sukuna_stage_id1 #(
         id1_pc0_o         <= if2_pc0_i;
         id1_inst0_o       <= if2_inst0_i;
         id1_type0_o       <= (is_load0 || is_store0 || is_amo0) ? 2'b10 :
-                             (is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || is_fence0) ? 2'b00 :
-                             is_fp0 ? 2'b11 : 2'b01;
+                             (is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || (is_fence0 && funct3_0 == 3'b001)) ? 2'b00 :
+                             2'b01;
         id1_rd0_o         <= l0_writes_rd ? if2_inst0_i[11:7] : 5'd0;
         id1_rs1_0_o       <= (is_lui0 || is_auipc0 || is_jal0) ? 5'd0 : if2_inst0_i[19:15];
         id1_rs2_0_o       <= (is_lui0 || is_auipc0 || is_jal0 || is_jalr0 || is_load0 || is_op_imm0 || is_opi32_0 || (is_amo0 && funct7_0[6:2] == 5'b00010)) ? 5'd0 : if2_inst0_i[24:20];

@@ -96,7 +96,8 @@ module sukuna_thread_pipe #(
   input  wire [XLEN-1:0]            shared_resp_data_i
 );
 
-  assign fence_i_flush_o = 1'b0;
+  wire            wb_fence_i_valid;
+  assign fence_i_flush_o = wb_fence_i_valid;
 
   // --------------------------------------------------------------------------
   // Hazard & Stall Wires
@@ -228,6 +229,7 @@ module sukuna_thread_pipe #(
   wire            ex_wb_l0_sret;
   wire            ex_wb_l0_wfi;
   wire            ex_wb_l0_sfence;
+  wire            ex_wb_l0_fence_i;
 
   // WB -> RegFile Commit
   wire            rf_wen_p0, rf_wen_p1, rf_wen_p2;
@@ -383,6 +385,33 @@ module sukuna_thread_pipe #(
   );
 
   // --------------------------------------------------------------------------
+  // Floating-Point Register File (FPR f0-f31)
+  // --------------------------------------------------------------------------
+  wire [XLEN-1:0] fpr_rdata_rs1;
+  wire [XLEN-1:0] fpr_rdata_rs2;
+  wire            wb_fpr_wen;
+  wire [4:0]      wb_fpr_waddr;
+  wire [XLEN-1:0] wb_fpr_wdata;
+  wire            ex_wb_l0_writes_fpr;
+
+  wire [XLEN-1:0] ex_l0_fpr_src1;
+  wire [XLEN-1:0] ex_l0_fpr_src2;
+
+  sukuna_fregfile #(
+    .XLEN(XLEN)
+  ) u_fregfile (
+    .clk_i      (clk_i),
+    .rst_ni     (rst_ni),
+    .raddr_rs1_i(id2_rs1_0),
+    .rdata_rs1_o(fpr_rdata_rs1),
+    .raddr_rs2_i(id2_rs2_0),
+    .rdata_rs2_o(fpr_rdata_rs2),
+    .wen_i      (wb_fpr_wen),
+    .waddr_i    (wb_fpr_waddr),
+    .wdata_i    (wb_fpr_wdata)
+  );
+
+  // --------------------------------------------------------------------------
   // Stage 4: ID2
   // --------------------------------------------------------------------------
   sukuna_stage_id2 #(
@@ -505,6 +534,14 @@ module sukuna_thread_pipe #(
     .rf_rdata_l0_rs2_i  (rf_rdata_l0_rs2),
     .rf_rdata_l1_rs1_i  (rf_rdata_l1_rs1),
     .rf_rdata_l1_rs2_i  (rf_rdata_l1_rs2),
+    .fpr_rdata_l0_rs1_i (fpr_rdata_rs1),
+    .fpr_rdata_l0_rs2_i (fpr_rdata_rs2),
+    .fwd_ex_fpr_val_i   (ex_wb_l0_writes_fpr),
+    .fwd_ex_fpr_rd_i    (ex_wb_l0_rd),
+    .fwd_ex_fpr_data_i  (ex_wb_l0_data),
+    .fwd_wb_fpr_val_i   (wb_fpr_wen),
+    .fwd_wb_fpr_rd_i    (wb_fpr_waddr),
+    .fwd_wb_fpr_data_i  (wb_fpr_wdata),
     .fwd_ex_val_i       (ex_wb_l0_valid),
     .fwd_ex_rd_i        (ex_wb_l0_rd),
     .fwd_ex_data_i      (ex_wb_l0_data),
@@ -528,6 +565,8 @@ module sukuna_thread_pipe #(
     .ex_l0_is_word_o    (ex_l0_is_word),
     .ex_l0_use_imm_o    (ex_l0_use_imm),
     .ex_l0_use_pc_o     (ex_l0_use_pc),
+    .ex_l0_fpr_src1_o   (ex_l0_fpr_src1),
+    .ex_l0_fpr_src2_o   (ex_l0_fpr_src2),
     .ex_l1_valid_o      (ex_l1_valid),
     .ex_l1_pc_o         (ex_l1_pc),
     .ex_l1_rd_o         (ex_l1_rd),
@@ -601,6 +640,11 @@ module sukuna_thread_pipe #(
     .int_en_l1_i        (ex_int_en_l1),
     .ma_en_l0_i         (ex_ma_en_l0),
     .ma_en_l1_i         (ex_ma_en_l1),
+    .fpr_src1_i         (ex_l0_fpr_src1),
+    .fpr_src2_i         (ex_l0_fpr_src2),
+    .wb_fpr_wen_i       (wb_fpr_wen),
+    .wb_fpr_rd_i        (wb_fpr_waddr),
+    .wb_fpr_data_i      (wb_fpr_wdata),
     .csr_req_valid_o    (csr_req_valid),
     .csr_raddr_o        (csr_raddr),
     .csr_rwen_o         (csr_rwen),
@@ -639,6 +683,8 @@ module sukuna_thread_pipe #(
     .ex_wb_l0_sret_o    (ex_wb_l0_sret),
     .ex_wb_l0_wfi_o     (ex_wb_l0_wfi),
     .ex_wb_l0_sfence_o  (ex_wb_l0_sfence),
+    .ex_wb_l0_fence_i_o (ex_wb_l0_fence_i),
+    .ex_wb_l0_writes_fpr_o(ex_wb_l0_writes_fpr),
     .ex_wb_l1_valid_o   (ex_wb_l1_valid),
     .ex_wb_l1_pc_o      (ex_wb_l1_pc),
     .ex_wb_l1_rd_o      (ex_wb_l1_rd),
@@ -678,6 +724,8 @@ module sukuna_thread_pipe #(
     .l0_sret_i        (ex_wb_l0_sret),
     .l0_wfi_i         (ex_wb_l0_wfi),
     .l0_sfence_i      (ex_wb_l0_sfence),
+    .l0_fence_i_i     (ex_wb_l0_fence_i),
+    .l0_writes_fpr_i  (ex_wb_l0_writes_fpr),
     .l1_valid_i       (ex_wb_l1_valid),
     .l1_pc_i          (ex_wb_l1_pc),
     .l1_rd_i          (ex_wb_l1_rd),
@@ -707,7 +755,11 @@ module sukuna_thread_pipe #(
     .mret_valid_o     (wb_mret_valid),
     .sret_valid_o     (wb_sret_valid),
     .wfi_valid_o      (wb_wfi_valid),
-    .sfence_valid_o   (wb_sfence_valid)
+    .sfence_valid_o   (wb_sfence_valid),
+    .fence_i_valid_o  (wb_fence_i_valid),
+    .fpr_wen_o        (wb_fpr_wen),
+    .fpr_waddr_o      (wb_fpr_waddr),
+    .fpr_wdata_o      (wb_fpr_wdata)
   );
 
   // --------------------------------------------------------------------------
@@ -771,6 +823,7 @@ module sukuna_thread_pipe #(
     .sret_valid_i       (wb_sret_valid),
     .wfi_valid_i        (wb_wfi_valid),
     .sfence_valid_i     (wb_sfence_valid),
+    .fence_i_valid_i    (wb_fence_i_valid),
     .trap_flush_o       (trap_flush),
     .trap_target_pc_o   (trap_target_pc),
     .satp_o             (satp_o),

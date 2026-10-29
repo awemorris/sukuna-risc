@@ -62,6 +62,16 @@ module sukuna_stage_id3 #(
   input  wire [XLEN-1:0]  rf_rdata_l1_rs1_i,
   input  wire [XLEN-1:0]  rf_rdata_l1_rs2_i,
 
+  // Floating-Point Register File Read Data & Forwarding
+  input  wire [XLEN-1:0]  fpr_rdata_l0_rs1_i,
+  input  wire [XLEN-1:0]  fpr_rdata_l0_rs2_i,
+  input  wire             fwd_ex_fpr_val_i,
+  input  wire [4:0]       fwd_ex_fpr_rd_i,
+  input  wire [XLEN-1:0]  fwd_ex_fpr_data_i,
+  input  wire             fwd_wb_fpr_val_i,
+  input  wire [4:0]       fwd_wb_fpr_rd_i,
+  input  wire [XLEN-1:0]  fwd_wb_fpr_data_i,
+
   // Bypass / Forwarding inputs from EX & WB
   input  wire             fwd_ex_val_i,
   input  wire [4:0]       fwd_ex_rd_i,
@@ -91,6 +101,8 @@ module sukuna_stage_id3 #(
   output reg              ex_l0_is_word_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              ex_l0_use_imm_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              ex_l0_use_pc_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [XLEN-1:0]  ex_l0_fpr_src1_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [XLEN-1:0]  ex_l0_fpr_src2_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   output reg              ex_l1_valid_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0]  ex_l1_pc_o,         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -134,6 +146,15 @@ module sukuna_stage_id3 #(
                                 (fwd_wb_l0_val_i && (fwd_wb_l0_rd_i != 5'd0) && (fwd_wb_l0_rd_i == id2_rs2_1_i)) ? fwd_wb_l0_data_i :
                                 rf_rdata_l1_rs2_i;
 
+  // Bypass selection for FPR
+  wire [XLEN-1:0] l0_fpr_src1_mux = (fwd_ex_fpr_val_i && (fwd_ex_fpr_rd_i == id2_rs1_0_i)) ? fwd_ex_fpr_data_i :
+                                    (fwd_wb_fpr_val_i && (fwd_wb_fpr_rd_i == id2_rs1_0_i)) ? fwd_wb_fpr_data_i :
+                                    fpr_rdata_l0_rs1_i;
+
+  wire [XLEN-1:0] l0_fpr_src2_mux = (fwd_ex_fpr_val_i && (fwd_ex_fpr_rd_i == id2_rs2_0_i)) ? fwd_ex_fpr_data_i :
+                                    (fwd_wb_fpr_val_i && (fwd_wb_fpr_rd_i == id2_rs2_0_i)) ? fwd_wb_fpr_data_i :
+                                    fpr_rdata_l0_rs2_i;
+
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       ex_l0_valid_o      <= 1'b0;
@@ -153,6 +174,8 @@ module sukuna_stage_id3 #(
       ex_l0_is_word_o    <= 1'b0;
       ex_l0_use_imm_o    <= 1'b0;
       ex_l0_use_pc_o     <= 1'b0;
+      ex_l0_fpr_src1_o   <= {XLEN{1'b0}};
+      ex_l0_fpr_src2_o   <= {XLEN{1'b0}};
 
       ex_l1_valid_o      <= 1'b0;
       ex_l1_pc_o         <= {XLEN{1'b0}};
@@ -185,6 +208,8 @@ module sukuna_stage_id3 #(
         ex_l0_rs2_o    <= 5'd0;
         ex_l1_rs1_o    <= 5'd0;
         ex_l1_rs2_o    <= 5'd0;
+        ex_l0_fpr_src1_o <= {XLEN{1'b0}};
+        ex_l0_fpr_src2_o <= {XLEN{1'b0}};
       end else if (!stall_i) begin
         // Straight assignment of Lane 0
         ex_l0_valid_o      <= id2_valid0_i;
@@ -194,6 +219,8 @@ module sukuna_stage_id3 #(
         ex_l0_rs2_o        <= id2_rs2_0_i;
         ex_l0_src1_o       <= l0_src1_mux;
         ex_l0_src2_o       <= l0_src2_mux;
+        ex_l0_fpr_src1_o   <= l0_fpr_src1_mux;
+        ex_l0_fpr_src2_o   <= l0_fpr_src2_mux;
         ex_l0_imm_o        <= id2_imm0_i;
         ex_l0_alu_op_o     <= id2_alu_op0_i;
         ex_l0_mem_op_o     <= id2_mem_op0_i;
