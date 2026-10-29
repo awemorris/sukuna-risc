@@ -5,3 +5,4 @@ build/
 a.out
 .Xil
 syn/
+bsp/kc705/build_kc705/
