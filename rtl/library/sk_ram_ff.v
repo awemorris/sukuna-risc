@@ -15,7 +15,8 @@ module sk_ram_ff #(
   parameter ADDR_WIDTH = 5,
   parameter DEPTH      = (1 << ADDR_WIDTH),
   parameter ZERO_REG0  = 1,                 // If 1, address 0 always returns 0
-  parameter FWD_WRITE  = 0                  // If 1, internal same-cycle write forwarding enabled
+  parameter FWD_WRITE  = 0,                 // If 1, internal same-cycle write forwarding enabled
+  parameter [DATA_WIDTH-1:0] RESET_VAL = {DATA_WIDTH{1'b0}}
 )(
   input  wire                  clk_i,
   input  wire                  rst_ni,
@@ -44,14 +45,14 @@ module sk_ram_ff #(
   output wire [DATA_WIDTH-1:0] rdata_b_o
 );
 
-  reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+  (* ram_style = "registers" *) reg [DATA_WIDTH-1:0] mem [0:DEPTH-1]; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   integer i;
 
   // Synchronous Write with Reset
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       for (i = 0; i < DEPTH; i = i + 1) begin
-        mem[i] <= {DATA_WIDTH{1'b0}};
+        mem[i] <= RESET_VAL;
       end
     end else begin
       if (wen_i) begin

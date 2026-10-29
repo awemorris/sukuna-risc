@@ -392,9 +392,9 @@ module sukuna_stage_ex #(
   wire   ex_freeze  = stall_i || ex_stall_o;
 
   // Latch MA-EU response to prevent 1-cycle response pulse from dropping during stalls
-  reg [XLEN-1:0] ma_data_q;
-  reg            ma_valid_q;
-  reg [4:0]      ma_rd_q;
+  reg [XLEN-1:0] ma_data_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg            ma_valid_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [4:0]      ma_rd_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin

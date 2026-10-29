@@ -6,9 +6,26 @@ Sukuna-RISC
 The name `Sukuna` comes from `Sukunahikona`, literally meaning "Small Genius," with a double meaning of "reduced."
 
 Overall Architecture:
-- ISA: RISC-V RV64GC
+- ISA: RISC-V RV64G (RV64IMAFD + Zicsr + Zifencei, pure 32-bit fixed-length instructions)
 - Pipeline: In-order 3-SMT, Asymmetric Dual-issue (IF1-IF2-ID1-ID2-ID3-EX-WB), 1-core/3-thread
 - Cache: L1I 48KB (16KB/thread), L1D 48KB (16KB/thread), shared L2 256KB
+
+Architectural Decision: RV64G over RV64GC (Eliminating RVC)
+-----------------------------------------------------------
+Instruction compression (RVC: 16-bit compressed instructions) is inherently a trade-off technique designed to maximize instruction cache hit rates and effective bandwidth in environments where memory hierarchy bandwidth is severely constrained.
+
+In a processor architecture with well-provisioned instruction cache, L2 cache, and memory interconnect bandwidth, adopting RVC introduces disproportionate hardware penalties:
+- **Variable-length boundary detection**: Identifying variable 16-bit vs. 32-bit instructions at arbitrary 2-byte granularities.
+- **Cross-boundary instruction reassembly**: Heavy multi-entry fetch buffers required to reconstruct instructions that straddle 64-bit cache line boundaries.
+- **Dynamic shifting and speculative decompression for dual-issue**: The start position of the second instruction dynamically depends on the length of the first instruction, requiring parallel speculative decompression trees (C2 vs. C4 candidates) and wide multiplexing logic.
+- **Instruction address misaligned exceptions**: Complex handling of non-4-byte-aligned branch targets and trap vectors.
+
+These factors concentrate logic complexity and wiring congestion directly into the instruction fetch (IF) stages, unnecessarily bloating the logic footprint and becoming the primary bottleneck that degrades maximum operating frequency ($F_{\max}$).
+
+By decisively committing to **RV64G (32-bit fixed-length instructions) and dropping RVC ("C")**:
+- The fetch-to-decode structure is dramatically streamlined.
+- All instruction addresses and PC increments are strictly 4-byte (or 8-byte) aligned. Dual-issue slot extraction becomes trivial, fixed wire slicing (`[31:0]` for slot 0, `[63:32]` for slot 1).
+- The core eliminates all RVC decompressors and complicated dynamic buffer shifters, unleashing the true potential of an ultra-fast, lean, and clean RISC architecture.
 
 Threading Strategy:
 - 1-thread for kernel: handles interrupts and devices

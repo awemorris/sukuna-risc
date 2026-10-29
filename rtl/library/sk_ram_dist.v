@@ -29,7 +29,7 @@ module sk_ram_dist #(
   output reg  [DATA_WIDTH-1:0] rdata_o
 );
 
-  reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+  (* ram_style = "distributed" *) reg [DATA_WIDTH-1:0] mem [0:DEPTH-1]; /* synthesis syn_ramstyle = "select_ram" */
 
   // Synchronous Write
   always @(posedge clk_i) begin

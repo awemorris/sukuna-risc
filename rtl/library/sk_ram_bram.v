@@ -16,7 +16,8 @@ module sk_ram_bram #(
   parameter DEPTH           = (1 << ADDR_WIDTH),
   parameter PIPELINE_STAGES = 1,                 // 1: single register, 2: two output registers
   parameter BYTE_WRITE_EN   = 1,
-  parameter WE_WIDTH        = BYTE_WRITE_EN ? (DATA_WIDTH / 8) : 1
+  parameter WE_WIDTH        = BYTE_WRITE_EN ? (DATA_WIDTH / 8) : 1,
+  parameter RAM_STYLE       = "block"
 )(
   input  wire                  clk_i,
   input  wire                  rst_ni,
@@ -33,14 +34,13 @@ module sk_ram_bram #(
   output wire [DATA_WIDTH-1:0] rdata_o
 );
 
-  // Behavioral memory array for simulation & FPGA BRAM inference
-  reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+  // Behavioral memory array for simulation & FPGA BRAM/LUTRAM inference
+  (* ram_style = RAM_STYLE *) reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
 
   // Pipeline output registers
   reg [DATA_WIDTH-1:0] rdata_pipe_q;
   reg [DATA_WIDTH-1:0] rdata_out_q;
 
-  integer i;
   integer init_i;
 
   initial begin
@@ -51,32 +51,30 @@ module sk_ram_bram #(
     rdata_out_q  = {DATA_WIDTH{1'b0}};
   end
 
-  // Synchronous Write
-  reg [DATA_WIDTH-1:0] mem_next;
-  always @(posedge clk_i) begin
-    if (wen_i) begin
-      if (BYTE_WRITE_EN) begin
-        mem_next = mem[waddr_i];
-        for (i = 0; i < WE_WIDTH; i = i + 1) begin
-          if (wstrb_i[i]) begin
-            mem_next[i*8 +: 8] = wdata_i[i*8 +: 8];
+  // Synchronous Write (Xilinx standard BRAM inference template)
+  genvar i;
+  generate
+    if (BYTE_WRITE_EN) begin : gen_byte_wr
+      for (i = 0; i < WE_WIDTH; i = i + 1) begin : gen_byte
+        always @(posedge clk_i) begin
+          if (wen_i && wstrb_i[i]) begin
+            mem[waddr_i][i*8 +: 8] <= wdata_i[i*8 +: 8];
           end
         end
-        mem[waddr_i] <= mem_next;
-      end else begin
-        mem[waddr_i] <= wdata_i;
+      end
+    end else begin : gen_word_wr
+      always @(posedge clk_i) begin
+        if (wen_i) begin
+          mem[waddr_i] <= wdata_i;
+        end
       end
     end
-  end
+  endgenerate
 
-  // Synchronous Read (Stage 1) - WRITE_FIRST forwarding
+  // Synchronous Read (Stage 1)
   always @(posedge clk_i) begin
     if (ren_i) begin
-      if (wen_i && (waddr_i == raddr_i)) begin
-        rdata_pipe_q <= wdata_i;
-      end else begin
-        rdata_pipe_q <= mem[raddr_i];
-      end
+      rdata_pipe_q <= mem[raddr_i];
     end
   end
 

@@ -117,7 +117,7 @@ module sukuna_fp_unit #(
   wire is_fcvt_int_to_fp = (funct7_i[6:2] == 5'b11010);
   wire is_fcvt           = is_fcvt_fp_to_int || is_fcvt_int_to_fp;
 
-  reg fcvt_busy_q;
+  reg fcvt_busy_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       fcvt_busy_q <= 1'b0;
@@ -148,11 +148,11 @@ module sukuna_fp_unit #(
   wire        exp_too_large_comb = is_sp ? (exp_s_diff >= 8'd63) : (exp_d_diff >= 11'd63);
   wire        sign_f2i_comb      = is_sp ? op_a_sp[31] : op_a_dp[63];
 
-  reg [63:0] s1_f2i_raw_q;
-  reg        s1_f2i_too_small_q;
-  reg        s1_f2i_too_large_q;
-  reg        s1_f2i_sign_q;
-  reg [1:0]  s1_f2i_rs2_q;
+  reg [63:0] s1_f2i_raw_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg        s1_f2i_too_small_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg        s1_f2i_too_large_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg        s1_f2i_sign_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [1:0]  s1_f2i_rs2_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -198,11 +198,11 @@ module sukuna_fp_unit #(
   wire [31:0] val32_comb       = hi_has_ones_comb ? abs_int_comb[63:32] : abs_int_comb[31:0];
   wire [63:0] val64_comb       = hi_has_ones_comb ? abs_int_comb : {abs_int_comb[31:0], 32'd0};
 
-  reg [63:0] s1_val64_q;
-  reg [31:0] s1_val32_q;
-  reg        s1_hi_has_ones_q;
-  reg        s1_sign_int_q;
-  reg        s1_zero_q;
+  reg [63:0] s1_val64_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [31:0] s1_val32_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg        s1_hi_has_ones_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg        s1_sign_int_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg        s1_zero_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin

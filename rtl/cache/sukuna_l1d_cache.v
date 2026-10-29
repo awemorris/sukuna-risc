@@ -47,7 +47,7 @@ module sukuna_l1d_cache #(
   output reg                        l2_req_valid_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg                        l2_req_write_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [PADDR_WIDTH-1:2]     l2_line_paddr_w_o, /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [CACHE_LINE_BITS-1:0] l2_wline_data_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output wire [CACHE_LINE_BITS-1:0] l2_wline_data_o,
   input  wire                       l2_req_ready_i,
   input  wire                       l2_resp_valid_i,
   input  wire [CACHE_LINE_BITS-1:0] l2_rline_data_i
@@ -95,8 +95,63 @@ module sukuna_l1d_cache #(
   reg [WAY_BITS-1:0] victim_ptr_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   localparam integer MAX_WAY_IDX = WAYS - 1;
 
-  // Per-way valid bit register array (resets to 0)
-  reg [SETS-1:0]     way_valid_q [0:WAYS-1];
+  // Per-way valid bit storage instantiated via sk_ram_ff
+  wire [SETS-1:0] way_valid_out [0:WAYS-1];
+  wire [WAYS-1:0] way_valid_wen;
+  wire [SETS-1:0] way_valid_wdata [0:WAYS-1];
+
+  genvar gw;
+  generate
+    for (gw = 0; gw < WAYS; gw = gw + 1) begin : gen_l1d_way_valid
+      wire snoop_inv = snoop_req_valid_i && snoop_invalidate_i && snoop_way_hit[gw];
+      wire refill_vld = (state_q == S_REFILL) && l2_resp_valid_i && (victim_ptr_q == gw[WAY_BITS-1:0]);
+      assign way_valid_wen[gw] = snoop_inv || refill_vld;
+      assign way_valid_wdata[gw] = snoop_inv ? (way_valid_out[gw] & ~(64'd1 << snoop_index)) :
+                                               (way_valid_out[gw] | (64'd1 << req_paddr_w_q[5+INDEX_BITS:6]));
+
+      sk_ram_ff #(
+        .DATA_WIDTH (SETS),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_way_valid_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (way_valid_wen[gw]),
+        .waddr_i  (1'b0),
+        .wdata_i  (way_valid_wdata[gw]),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({SETS{1'b0}}),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({SETS{1'b0}}),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(way_valid_out[gw]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+    end
+  endgenerate
+
+  // 512-bit writeback data buffer instantiated via sk_ram_ff macro
+  wire                       l2_wline_wen = (state_q == S_IDLE) && req_valid_q && (is_mmio || (!hit && victim_dirty));
+  wire [CACHE_LINE_BITS-1:0] l2_wline_wdata = is_mmio ? {8{req_wdata_q}} : data_rdata[victim_ptr_q];
+
+  sk_ram_ff #(
+    .DATA_WIDTH (CACHE_LINE_BITS),
+    .ADDR_WIDTH (1),
+    .DEPTH      (1),
+    .ZERO_REG0  (0)
+  ) u_l2_wline_ram (
+    .clk_i    (clk_i),
+    .rst_ni   (rst_ni),
+    .wen_i    (l2_wline_wen),
+    .waddr_i  (1'b0),
+    .wdata_i  (l2_wline_wdata),
+    .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({CACHE_LINE_BITS{1'b0}}),
+    .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({CACHE_LINE_BITS{1'b0}}),
+    .raddr_a_i(1'b0),
+    .rdata_a_o(l2_wline_data_o),
+    .raddr_b_i(1'b0),
+    .rdata_b_o()
+  );
 
   wire is_busy = (state_q != S_IDLE);
 
@@ -157,25 +212,22 @@ module sukuna_l1d_cache #(
       wire way_write_hit  = (state_q == S_IDLE) && req_valid_q && req_write_q && way_hit[w] && !is_mmio;
       wire way_snoop_inv  = snoop_req_valid_i && snoop_invalidate_i && snoop_way_hit[w];
 
-      // Tag Array ({dirty, valid, tag})
-      sk_ram_bram #(
-        .DATA_WIDTH     (TAG_WIDTH + 2),
-        .ADDR_WIDTH     (INDEX_BITS),
-        .DEPTH          (SETS),
-        .PIPELINE_STAGES(1),
-        .BYTE_WRITE_EN  (0)
+      // Tag Array ({dirty, valid, tag}) - Distributed RAM for fast 1-cycle tag comparison
+      sk_ram_dist #(
+        .DATA_WIDTH (TAG_WIDTH + 2),
+        .ADDR_WIDTH (INDEX_BITS),
+        .DEPTH      (SETS)
       ) u_dtag_ram (
-        .clk_i  (clk_i),
-        .rst_ni (rst_ni),
-        .wen_i  (way_refill_wen || way_write_hit || way_snoop_inv),
-        .wstrb_i(1'b1),
-        .waddr_i(way_snoop_inv ? snoop_index : (way_refill_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index)),
-        .wdata_i(way_snoop_inv ? {(TAG_WIDTH+2){1'b0}} :
-                 way_write_hit ? {1'b1, 1'b1, req_tag_q} :
-                 way_refill_wen ? {req_write_q, 1'b1, req_tag_q} : {(TAG_WIDTH+2){1'b0}}),
-        .ren_i  (mem_req_valid_i || snoop_req_valid_i),
-        .raddr_i(snoop_req_valid_i ? snoop_index : req_index),
-        .rdata_o(tag_rdata[w])
+        .clk_i   (clk_i),
+        .rst_ni  (rst_ni),
+        .wen_i   (way_refill_wen || way_write_hit || way_snoop_inv),
+        .waddr_i (way_snoop_inv ? snoop_index : (way_refill_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index)),
+        .wdata_i (way_snoop_inv ? {(TAG_WIDTH+2){1'b0}} :
+                  way_write_hit ? {1'b1, 1'b1, req_tag_q} :
+                  way_refill_wen ? {req_write_q, 1'b1, req_tag_q} : {(TAG_WIDTH+2){1'b0}}),
+        .ren_i   (mem_req_valid_i || snoop_req_valid_i),
+        .raddr_i (snoop_req_valid_i ? snoop_index : req_index),
+        .rdata_o (tag_rdata[w])
       );
 
       // Data Array with Byte-Write Enable Support
@@ -198,9 +250,9 @@ module sukuna_l1d_cache #(
         .rdata_o(data_rdata[w])
       );
 
-      assign way_hit[w]       = req_valid_q && way_valid_q[w][req_paddr_w_q[5+INDEX_BITS:6]] &&
+      assign way_hit[w]       = req_valid_q && way_valid_out[w][req_paddr_w_q[5+INDEX_BITS:6]] &&
                                 (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
-      assign snoop_way_hit[w] = way_valid_q[w][snoop_index] &&
+      assign snoop_way_hit[w] = way_valid_out[w][snoop_index] &&
                                 (tag_rdata[w][TAG_WIDTH-1:0] == snoop_tag);
     end
   endgenerate
@@ -237,11 +289,10 @@ module sukuna_l1d_cache #(
   // --------------------------------------------------------------------------
   // Eviction & Refill State Machine
   // --------------------------------------------------------------------------
-  wire victim_dirty = way_valid_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] &&
+  wire victim_dirty = way_valid_out[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] &&
                       (tag_rdata[victim_ptr_q][TAG_WIDTH+1] == 1'b1);
   wire [TAG_WIDTH-1:0] victim_tag = tag_rdata[victim_ptr_q][TAG_WIDTH-1:0];
 
-  integer wy;
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q           <= S_IDLE;
@@ -249,21 +300,8 @@ module sukuna_l1d_cache #(
       l2_req_valid_o    <= 1'b0;
       l2_req_write_o    <= 1'b0;
       l2_line_paddr_w_o <= {(PADDR_WIDTH-2){1'b0}};
-      l2_wline_data_o   <= {CACHE_LINE_BITS{1'b0}};
-      for (wy = 0; wy < WAYS; wy = wy + 1) begin
-        way_valid_q[wy] <= {SETS{1'b0}};
-      end
     end else begin
       l2_req_valid_o <= 1'b0;
-
-      // Snoop invalidation
-      if (snoop_req_valid_i && snoop_invalidate_i) begin
-        for (wy = 0; wy < WAYS; wy = wy + 1) begin
-          if (snoop_way_hit[wy]) begin
-            way_valid_q[wy][snoop_index] <= 1'b0;
-          end
-        end
-      end
 
       case (state_q)
         S_IDLE: begin
@@ -271,7 +309,6 @@ module sukuna_l1d_cache #(
             l2_req_valid_o    <= 1'b1;
             l2_req_write_o    <= req_write_q;
             l2_line_paddr_w_o <= req_paddr_w_q;
-            l2_wline_data_o   <= {8{req_wdata_q}};
             state_q           <= S_MMIO;
           end else if (req_valid_q && !hit) begin
             if (victim_dirty) begin
@@ -279,7 +316,6 @@ module sukuna_l1d_cache #(
               l2_req_valid_o    <= 1'b1;
               l2_req_write_o    <= 1'b1;
               l2_line_paddr_w_o <= {victim_tag, req_paddr_w_q[5+INDEX_BITS:6], 4'b0000};
-              l2_wline_data_o   <= data_rdata[victim_ptr_q];
               state_q           <= S_EVICT;
             end else begin
               // Read refill from L2
@@ -316,7 +352,6 @@ module sukuna_l1d_cache #(
           l2_req_write_o <= 1'b0;
           if (l2_resp_valid_i) begin
             l2_req_valid_o <= 1'b0;
-            way_valid_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] <= 1'b1;
             victim_ptr_q   <= (victim_ptr_q == MAX_WAY_IDX[WAY_BITS-1:0]) ? {WAY_BITS{1'b0}} : victim_ptr_q + 1'b1;
             state_q        <= S_IDLE;
           end

@@ -77,8 +77,36 @@ module sukuna_l1i_cache #(
   reg [TAG_WIDTH-1:0]    req_tag_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]  req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  // Per-way valid bit register array (resets to 0)
-  reg [SETS-1:0]         way_valid_q [0:WAYS-1];
+  // Per-way valid bit storage instantiated via sk_ram_ff
+  wire [SETS-1:0] way_valid_out [0:WAYS-1];
+  wire [WAYS-1:0] way_valid_wen;
+  wire [SETS-1:0] way_valid_wdata [0:WAYS-1];
+
+  genvar gw;
+  generate
+    for (gw = 0; gw < WAYS; gw = gw + 1) begin : gen_l1i_way_valid
+      assign way_valid_wen[gw]   = fence_i_flush_i || (refill_resp_valid_i && (victim_ptr_q == gw[WAY_BITS-1:0]));
+      assign way_valid_wdata[gw] = fence_i_flush_i ? {SETS{1'b0}} : (way_valid_out[gw] | (64'd1 << req_index_q));
+      sk_ram_ff #(
+        .DATA_WIDTH (SETS),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_way_valid_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (way_valid_wen[gw]),
+        .waddr_i  (1'b0),
+        .wdata_i  (way_valid_wdata[gw]),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({SETS{1'b0}}),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({SETS{1'b0}}),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(way_valid_out[gw]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+    end
+  endgenerate
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -119,23 +147,20 @@ module sukuna_l1i_cache #(
     for (w = 0; w < WAYS; w = w + 1) begin : gen_way
       wire way_wen = refill_resp_valid_i && (victim_ptr_q == w[WAY_BITS-1:0]);
 
-      // Tag Array (Stores 1-bit valid + TAG_WIDTH bits tag)
-      sk_ram_bram #(
-        .DATA_WIDTH     (TAG_WIDTH + 1),
-        .ADDR_WIDTH     (INDEX_BITS),
-        .DEPTH          (SETS),
-        .PIPELINE_STAGES(1),
-        .BYTE_WRITE_EN  (0)
+      // Tag Array (Stores 1-bit valid + TAG_WIDTH bits tag) - Distributed RAM for fast 1-cycle tag comparison
+      sk_ram_dist #(
+        .DATA_WIDTH (TAG_WIDTH + 1),
+        .ADDR_WIDTH (INDEX_BITS),
+        .DEPTH      (SETS)
       ) u_tag_ram (
-        .clk_i  (clk_i),
-        .rst_ni (rst_ni),
-        .wen_i  (way_wen || fence_i_flush_i),
-        .wstrb_i(1'b1),
-        .waddr_i(way_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index),
-        .wdata_i(fence_i_flush_i ? {(TAG_WIDTH+1){1'b0}} : {1'b1, req_tag_q}),
-        .ren_i  (fetch_req_valid_i && !stall_i),
-        .raddr_i(req_index),
-        .rdata_o(tag_rdata[w])
+        .clk_i   (clk_i),
+        .rst_ni  (rst_ni),
+        .wen_i   (way_wen || fence_i_flush_i),
+        .waddr_i (way_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index),
+        .wdata_i (fence_i_flush_i ? {(TAG_WIDTH+1){1'b0}} : {1'b1, req_tag_q}),
+        .ren_i   (fetch_req_valid_i && !stall_i),
+        .raddr_i (req_index),
+        .rdata_o (tag_rdata[w])
       );
 
       // Data Array (Stores 512-bit cache line)
@@ -158,7 +183,7 @@ module sukuna_l1i_cache #(
       );
 
       // Hit comparison for way w
-      assign way_hit[w] = req_valid_q && way_valid_q[w][req_index_q] &&
+      assign way_hit[w] = req_valid_q && way_valid_out[w][req_index_q] &&
                           (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
     end
   endgenerate
@@ -194,25 +219,18 @@ module sukuna_l1i_cache #(
   assign refill_req_valid_o    = req_valid_q && !hit && !miss_busy_q;
   assign refill_line_paddr_w_o = {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000}; // Line aligned
 
-  integer wy;
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       miss_busy_q  <= 1'b0;
       victim_ptr_q <= {WAY_BITS{1'b0}};
-      for (wy = 0; wy < WAYS; wy = wy + 1) begin
-        way_valid_q[wy] <= {SETS{1'b0}};
-      end
     end else begin
       if (fence_i_flush_i) begin
-        for (wy = 0; wy < WAYS; wy = wy + 1) begin
-          way_valid_q[wy] <= {SETS{1'b0}};
-        end
+        // flush handled by sk_ram_ff
       end else if (refill_req_valid_o && refill_req_ready_i) begin
         miss_busy_q <= 1'b1;
       end else if (refill_resp_valid_i) begin
-        miss_busy_q                       <= 1'b0;
-        way_valid_q[victim_ptr_q][req_index_q] <= 1'b1;
-        victim_ptr_q                      <= (victim_ptr_q == MAX_WAY_IDX[WAY_BITS-1:0]) ? {WAY_BITS{1'b0}} : victim_ptr_q + 1'b1;
+        miss_busy_q  <= 1'b0;
+        victim_ptr_q <= (victim_ptr_q == MAX_WAY_IDX[WAY_BITS-1:0]) ? {WAY_BITS{1'b0}} : victim_ptr_q + 1'b1;
       end
     end
   end

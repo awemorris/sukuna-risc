@@ -40,14 +40,50 @@ module sukuna_l1_tlb #(
 );
 
   // --------------------------------------------------------------------------
-  // CAM Entry Storage (8 Entries, strict DFF with design-rule.md directives)
+  // CAM Entry Storage (8 Entries, instantiated via sk_ram_ff macro)
   // --------------------------------------------------------------------------
   reg [NUM_ENTRIES-1:0]      entry_valid_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [26:0]                 entry_vpn_q   [0:NUM_ENTRIES-1];
-  reg [PADDR_WIDTH-13:0]     entry_ppn_q   [0:NUM_ENTRIES-1];
-  reg [15:0]                 entry_asid_q  [0:NUM_ENTRIES-1];
-  reg [1:0]                  entry_psize_q [0:NUM_ENTRIES-1]; // 2'b00: 4KB, 2'b01: 2MB, 2'b10: 1GB
   reg [NUM_ENTRIES-1:0]      entry_fault_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  localparam CAM_ENTRY_WIDTH = 27 + (PADDR_WIDTH-12) + 16 + 2;
+  wire [CAM_ENTRY_WIDTH-1:0] cam_entry_rdata [0:NUM_ENTRIES-1];
+  wire [NUM_ENTRIES-1:0]     cam_entry_wen;
+  wire [CAM_ENTRY_WIDTH-1:0] cam_entry_wdata = {pending_vaddr_w_q[38:12], refill_paddr_w_i[PADDR_WIDTH-1:12], satp_asid_i, 2'b00};
+
+  wire [26:0]                 entry_vpn_q   [0:NUM_ENTRIES-1];
+  wire [PADDR_WIDTH-13:0]     entry_ppn_q   [0:NUM_ENTRIES-1];
+  wire [15:0]                 entry_asid_q  [0:NUM_ENTRIES-1];
+  wire [1:0]                  entry_psize_q [0:NUM_ENTRIES-1];
+
+  genvar ge;
+  generate
+    for (ge = 0; ge < NUM_ENTRIES; ge = ge + 1) begin : gen_cam_entries
+      assign cam_entry_wen[ge] = refill_resp_valid_i && refill_busy_q && (repl_ptr_q == ge[2:0]);
+      sk_ram_ff #(
+        .DATA_WIDTH (CAM_ENTRY_WIDTH),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_cam_entry_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (cam_entry_wen[ge]),
+        .waddr_i  (1'b0),
+        .wdata_i  (cam_entry_wdata),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({CAM_ENTRY_WIDTH{1'b0}}),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({CAM_ENTRY_WIDTH{1'b0}}),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(cam_entry_rdata[ge]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+
+      assign entry_vpn_q[ge]   = cam_entry_rdata[ge][CAM_ENTRY_WIDTH-1 : CAM_ENTRY_WIDTH-27];
+      assign entry_ppn_q[ge]   = cam_entry_rdata[ge][CAM_ENTRY_WIDTH-28 : 18];
+      assign entry_asid_q[ge]  = cam_entry_rdata[ge][17:2];
+      assign entry_psize_q[ge] = cam_entry_rdata[ge][1:0];
+    end
+  endgenerate
 
   // Round-robin / FIFO replacement pointer
   reg [2:0]                  repl_ptr_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -142,7 +178,6 @@ module sukuna_l1_tlb #(
   // --------------------------------------------------------------------------
   // Sequential State & Entry Refill / Flush Management
   // --------------------------------------------------------------------------
-  integer j;
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       entry_valid_q     <= {NUM_ENTRIES{1'b0}};
@@ -152,12 +187,6 @@ module sukuna_l1_tlb #(
       refill_busy_q     <= 1'b0;
       refill_req_q      <= 1'b0;
       refill_vaddr_w_q  <= {(VADDR_WIDTH-2){1'b0}};
-      for (j = 0; j < NUM_ENTRIES; j = j + 1) begin
-        entry_vpn_q[j]   <= 27'd0;
-        entry_ppn_q[j]   <= {(PADDR_WIDTH-12){1'b0}};
-        entry_asid_q[j]  <= 16'd0;
-        entry_psize_q[j] <= 2'b00;
-      end
     end else begin
       // SFENCE.VMA Flush
       if (flush_i) begin
@@ -180,10 +209,6 @@ module sukuna_l1_tlb #(
         if (refill_resp_valid_i && refill_busy_q) begin
           refill_busy_q               <= 1'b0;
           entry_valid_q[repl_ptr_q]   <= 1'b1;
-          entry_vpn_q[repl_ptr_q]     <= pending_vaddr_w_q[38:12];
-          entry_ppn_q[repl_ptr_q]     <= refill_paddr_w_i[PADDR_WIDTH-1:12];
-          entry_asid_q[repl_ptr_q]    <= satp_asid_i;
-          entry_psize_q[repl_ptr_q]   <= 2'b00; // Refill default 4KB
           entry_fault_q[repl_ptr_q]   <= refill_fault_i;
           repl_ptr_q                  <= repl_ptr_q + 1'b1;
         end

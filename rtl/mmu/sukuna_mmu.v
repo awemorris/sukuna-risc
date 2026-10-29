@@ -68,11 +68,11 @@ module sukuna_mmu #(
   // --------------------------------------------------------------------------
   // L1-TLB Refill Signals (6 clients: 0..2 = ITLB[0..2], 3..5 = DTLB[0..2])
   // --------------------------------------------------------------------------
-  wire                   refill_req        [0:5];
-  wire [VADDR_WIDTH-1:2] refill_vaddr_w    [0:5];
-  reg                    refill_resp_valid [0:5];
-  reg  [PADDR_WIDTH-1:2] refill_paddr_w    [0:5];
-  reg                    refill_fault      [0:5];
+  wire [5:0]                    refill_req;
+  wire [6*(VADDR_WIDTH-2)-1:0]  refill_vaddr_flat;
+  reg  [5:0]                    refill_resp_valid;
+  reg  [6*(PADDR_WIDTH-2)-1:0]  refill_paddr_flat;
+  reg  [5:0]                    refill_fault;
 
   // Instantiations of 3x L1-ITLB and 3x L1-DTLB
   generate
@@ -93,9 +93,9 @@ module sukuna_mmu #(
         .paddr_w_o          (itlb_paddr_w_o[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .page_fault_o       (itlb_page_fault_o[h]),
         .refill_req_o       (refill_req[h]),
-        .refill_vaddr_w_o   (refill_vaddr_w[h]),
+        .refill_vaddr_w_o   (refill_vaddr_flat[h*(VADDR_WIDTH-2) +: (VADDR_WIDTH-2)]),
         .refill_resp_valid_i(refill_resp_valid[h]),
-        .refill_paddr_w_i   (refill_paddr_w[h]),
+        .refill_paddr_w_i   (refill_paddr_flat[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .refill_fault_i     (refill_fault[h]),
         .flush_i            (sfence_flush_i[h])
       );
@@ -116,9 +116,9 @@ module sukuna_mmu #(
         .paddr_w_o          (dtlb_paddr_w_o[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .page_fault_o       (dtlb_page_fault_o[h]),
         .refill_req_o       (refill_req[3+h]),
-        .refill_vaddr_w_o   (refill_vaddr_w[3+h]),
+        .refill_vaddr_w_o   (refill_vaddr_flat[(3+h)*(VADDR_WIDTH-2) +: (VADDR_WIDTH-2)]),
         .refill_resp_valid_i(refill_resp_valid[3+h]),
-        .refill_paddr_w_i   (refill_paddr_w[3+h]),
+        .refill_paddr_w_i   (refill_paddr_flat[(3+h)*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .refill_fault_i     (refill_fault[3+h]),
         .flush_i            (sfence_flush_i[h])
       );
@@ -132,9 +132,9 @@ module sukuna_mmu #(
   reg                    arb_busy_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   wire                   l2_tlb_req_ready;
-  reg                    l2_tlb_req_valid_q;
-  reg [1:0]              l2_tlb_req_hart_id_q;
-  reg [VADDR_WIDTH-1:0]  l2_tlb_req_vaddr_q;
+  reg                    l2_tlb_req_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [1:0]              l2_tlb_req_hart_id_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [VADDR_WIDTH-1:0]  l2_tlb_req_vaddr_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // Simple round-robin selection
   wire [5:0] req_vec = {refill_req[5], refill_req[4], refill_req[3],
@@ -224,17 +224,14 @@ module sukuna_mmu #(
   // --------------------------------------------------------------------------
   // Arbiter Tracking and Response Demultiplexing
   // --------------------------------------------------------------------------
-  integer m;
   always @(*) begin
-    for (m = 0; m < 6; m = m + 1) begin
-      refill_resp_valid[m] = 1'b0;
-      refill_paddr_w[m]    = {(PADDR_WIDTH-2){1'b0}};
-      refill_fault[m]      = 1'b0;
-    end
+    refill_resp_valid = 6'd0;
+    refill_paddr_flat = {6*(PADDR_WIDTH-2){1'b0}};
+    refill_fault      = 6'd0;
 
     if (l2_resp_valid) begin
       refill_resp_valid[arb_winner_q] = 1'b1;
-      refill_paddr_w[arb_winner_q]    = l2_resp_paddr[PADDR_WIDTH-1:2];
+      refill_paddr_flat[arb_winner_q*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)] = l2_resp_paddr[PADDR_WIDTH-1:2];
       refill_fault[arb_winner_q]      = l2_resp_fault;
     end
   end
@@ -252,7 +249,7 @@ module sukuna_mmu #(
         arb_busy_q           <= 1'b1;
         l2_tlb_req_valid_q   <= 1'b1;
         l2_tlb_req_hart_id_q <= next_grant[2:0] >= 3'd3 ? (next_grant[1:0] - 2'd3) : next_grant[1:0];
-        l2_tlb_req_vaddr_q   <= {refill_vaddr_w[next_grant], 2'b00};
+        l2_tlb_req_vaddr_q   <= {refill_vaddr_flat[next_grant*(VADDR_WIDTH-2) +: (VADDR_WIDTH-2)], 2'b00};
       end else begin
         l2_tlb_req_valid_q   <= 1'b0;
         if (arb_busy_q && l2_resp_valid) begin

@@ -24,7 +24,7 @@ module sukuna_biu_axi4 #(
   input  wire [CACHE_LINE_BITS-1:0] mem_req_wdata_i,
   output wire                       mem_req_ready_o,
   output reg                        mem_resp_valid_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [CACHE_LINE_BITS-1:0] mem_resp_rdata_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output wire [CACHE_LINE_BITS-1:0] mem_resp_rdata_o,
 
   // --------------------------------------------------------------------------
   // AXI4 Master Interface
@@ -114,8 +114,38 @@ module sukuna_biu_axi4 #(
 
   reg [2:0]                 state_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [1:0]                 beat_cnt_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [CACHE_LINE_BITS-1:0] wdata_buf_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [CACHE_LINE_BITS-1:0] rdata_buf_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  // Multi-beat read buffer: partitioned into 4 x 128-bit DFF registers (<= 128 bits each)
+  reg [127:0]               rdata_buf0_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [127:0]               rdata_buf1_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [127:0]               rdata_buf2_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [127:0]               rdata_buf3_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  // 512-bit write data buffer instantiated via sk_ram_ff macro
+  wire [CACHE_LINE_BITS-1:0] wdata_buf_q;
+  wire wdata_buf_wen = (state_q == S_IDLE) && mem_req_valid_i && mem_req_write_i;
+
+  sk_ram_ff #(
+    .DATA_WIDTH (CACHE_LINE_BITS),
+    .ADDR_WIDTH (1),
+    .DEPTH      (1),
+    .ZERO_REG0  (0)
+  ) u_wdata_buf_ram (
+    .clk_i    (clk_i),
+    .rst_ni   (rst_ni),
+    .wen_i    (wdata_buf_wen),
+    .waddr_i  (1'b0),
+    .wdata_i  (mem_req_wdata_i),
+    .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({CACHE_LINE_BITS{1'b0}}),
+    .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({CACHE_LINE_BITS{1'b0}}),
+    .raddr_a_i(1'b0),
+    .rdata_a_o(wdata_buf_q),
+    .raddr_b_i(1'b0),
+    .rdata_b_o()
+  );
+
+  assign mem_resp_rdata_o = (beat_cnt_q == 2'd3) ? {m_axi_rdata, rdata_buf2_q, rdata_buf1_q, rdata_buf0_q} :
+                                                   {rdata_buf3_q, rdata_buf2_q, rdata_buf1_q, rdata_buf0_q};
 
   assign mem_req_ready_o = (state_q == S_IDLE);
 
@@ -125,10 +155,11 @@ module sukuna_biu_axi4 #(
     if (!rst_ni) begin
       state_q          <= S_IDLE;
       beat_cnt_q       <= 2'd0;
-      wdata_buf_q      <= {CACHE_LINE_BITS{1'b0}};
-      rdata_buf_q      <= {CACHE_LINE_BITS{1'b0}};
+      rdata_buf0_q     <= 128'd0;
+      rdata_buf1_q     <= 128'd0;
+      rdata_buf2_q     <= 128'd0;
+      rdata_buf3_q     <= 128'd0;
       mem_resp_valid_o <= 1'b0;
-      mem_resp_rdata_o <= {CACHE_LINE_BITS{1'b0}};
       m_axi_awvalid    <= 1'b0;
       m_axi_awaddr     <= {AXI_ADDR_WIDTH{1'b0}};
       m_axi_wvalid     <= 1'b0;
@@ -147,7 +178,6 @@ module sukuna_biu_axi4 #(
               // Write Burst: Start with AW address channel
               m_axi_awvalid <= 1'b1;
               m_axi_awaddr  <= full_req_addr;
-              wdata_buf_q   <= mem_req_wdata_i;
               state_q       <= S_AW_REQ;
             end else begin
               // Read Burst: Start with AR address channel
@@ -171,15 +201,14 @@ module sukuna_biu_axi4 #(
         S_R_BURST: begin
           if (m_axi_rvalid) begin
             case (beat_cnt_q)
-              2'd0: rdata_buf_q[127:0]   <= m_axi_rdata;
-              2'd1: rdata_buf_q[255:128] <= m_axi_rdata;
-              2'd2: rdata_buf_q[383:256] <= m_axi_rdata;
-              2'd3: rdata_buf_q[511:384] <= m_axi_rdata;
+              2'd0: rdata_buf0_q <= m_axi_rdata;
+              2'd1: rdata_buf1_q <= m_axi_rdata;
+              2'd2: rdata_buf2_q <= m_axi_rdata;
+              2'd3: rdata_buf3_q <= m_axi_rdata;
             endcase
 
             if (m_axi_rlast || (beat_cnt_q == 2'd3)) begin
               mem_resp_valid_o <= 1'b1;
-              mem_resp_rdata_o <= (beat_cnt_q == 2'd3) ? {m_axi_rdata, rdata_buf_q[383:0]} : rdata_buf_q;
               state_q          <= S_IDLE;
             end else begin
               beat_cnt_q <= beat_cnt_q + 1'b1;

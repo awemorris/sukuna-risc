@@ -9,7 +9,7 @@
 Sukuna-RISC は 1コア / 3スレッド（3-Hart: Hart 0=T1, Hart 1=T2, Hart 2=T3）構成のインオーダー 3-SMT プロセッサです。
 
 ### 主要パラメータ
-- **ISA**: RISC-V RV64GC (RV64I, M, A, F, D, C, Zicsr, Zifencei)
+- **ISA**: RISC-V RV64G (RV64I, M, A, F, D, Zicsr, Zifencei, 32-bit fixed-length)
 - **Harts (Threads)**: 3 Harts
   - **Hart 0 (T1: Kernel)**: OSカーネル、ドライバ、外部割り込み処理
   - **Hart 1 (T2: Foreground)**: アプリケーションメインスレッド
@@ -101,7 +101,7 @@ Lane 0 が常に先行（Older）、Lane 1 が常に後続（Younger）に固定
     - `inst0 = INT, inst1 = MA`: `inst1.rs1 != inst0.rd` かつ `inst1.rs2 != inst0.rd`（RAWなし）
     - `inst0 = MA, inst1 = INT`: `inst1.rs1 != inst0.rd` かつ `inst1.rs2 != inst0.rd`（RAWなし）かつ `inst0.rd != inst1.rd`（WAWなし）
   - **MEM -> INT 依存時の同時発行抑止（EXストール配線排除アーキテクチャ）**:
-    - MA (Load) はメモリアクセスレイテンシが 2 サイクル（アドレス計算 $\to$ L1Dアクセス）を要します。
+    - MA (Load) はメモリアクセスレイテンシが 3 サイクル（ADDR $\to$ MA1 $\to$ MA2）を要します。
     - もし後続の INT が先行 MEM のロード結果レジスタ（`rd0`）を使用する場合、これらを同時発行してしまうと、EX段において先行 MEM のデータが返るまでの間、INT側のみを局所的にストールさせる必要があります。
     - しかし、EX段内部に INT-EU のみを選択的に停止させるストール制御パスや、L1Dキャッシュ出力から ALU 入力へ直接引き回す専用クロスフォワーディング MUX 配線を設けると、配線混雑度が極度に悪化し、ASIC 1.5GHz（$T_{\text{clk}} = 667\,\text{ps}$）のタイミング収束の重大なボトルネックとなります。
     - そこで本設計では、**「後続 INT が先行 MEM の結果を使用する場合、ID2段で同時発行を完全に不許可とし、先行 MEM のみを単独発行する」** 設計を採用します。
@@ -118,7 +118,11 @@ Lane 0 が常に先行（Older）、Lane 1 が常に後続（Younger）に固定
 
 #### ⑥ EX (Execution)
 - **INT-EU**: `int_en_l0` が有効なら Lane 0 を、`int_en_l1` が有効なら Lane 1 を演算（1-cycle）。
-- **MA-EU**: `ma_en_l0` が有効なら Lane 0 を、`ma_en_l1` が有効なら Lane 1 を実行（2-cycle: ADDR $\to$ MA $\to$ L1D）。
+- **MA-EU**: `ma_en_l0` が有効なら Lane 0 を、`ma_en_l1` が有効なら Lane 1 を実行（3-cycle: ADDR $\to$ MA1 $\to$ MA2 $\to$ WB直結）。
+  - **ADDR (Cycle 1)**: 64bit 実効アドレス加算 (`base + offset`)。
+  - **MA1 (Cycle 2)**: L1-DTLB アドレス変換 ＋ L1D キャッシュ要求投入。
+  - **MA2 (Cycle 3)**: L1D BRAM 読み出し待機（レイテンシ待機段） $\to$ L1D 出力レジスタで同期ラッチ。
+  - **WB (Cycle 4)**: L1D のバッファ出力を直接 WB 段へ配線し、バイトアライメント（シフト）・符号拡張を行って RegFile へ書き込み。
 - **Shared EX**: 共有 FP/SIMD ユニット実行。
 
 #### ⑦ WB (Writeback / Commit)

@@ -35,8 +35,36 @@ module sukuna_clint #(
   // 64-bit global real-time counter
   reg [63:0] mtime_q;                           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  // Per-Hart 64-bit mtimecmp registers
-  reg [63:0] mtimecmp_q [0:NUM_HARTS-1];
+  // Per-Hart 64-bit mtimecmp registers (instantiated via sk_ram_ff)
+  wire [63:0] mtimecmp_q [0:NUM_HARTS-1];
+  wire [NUM_HARTS-1:0] mtimecmp_wen;
+  genvar gh;
+  generate
+    for (gh = 0; gh < NUM_HARTS; gh = gh + 1) begin : gen_mtimecmp
+      assign mtimecmp_wen[gh] = req_valid_i && req_write_i &&
+                                (offset >= 16'h4000 && offset < 16'h4000 + (NUM_HARTS * 8)) &&
+                                (offset[5:3] == gh[2:0]);
+      sk_ram_ff #(
+        .DATA_WIDTH (64),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0),
+        .RESET_VAL  (64'hFFFF_FFFF_FFFF_FFFF)
+      ) u_mtimecmp_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (mtimecmp_wen[gh]),
+        .waddr_i  (1'b0),
+        .wdata_i  (req_wdata_i),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i(64'd0),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i(64'd0),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(mtimecmp_q[gh]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+    end
+  endgenerate
 
   // Per-Hart 1-bit timer interrupt registers
   reg [NUM_HARTS-1:0] timer_irq_q;             /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -91,9 +119,6 @@ module sukuna_clint #(
       timer_irq_q  <= {NUM_HARTS{1'b0}};
       resp_valid_o <= 1'b0;
       resp_rdata_o <= {XLEN{1'b0}};
-      for (i = 0; i < NUM_HARTS; i = i + 1) begin
-        mtimecmp_q[i] <= 64'hFFFF_FFFF_FFFF_FFFF;
-      end
     end else begin
       // Free-running timer increment
       mtime_q <= mtime_q + 1'b1;
@@ -111,12 +136,6 @@ module sukuna_clint #(
       if (req_valid_i && req_write_i) begin
         if (offset == 16'hBFF8) begin
           mtime_q <= req_wdata_i;
-        end else if (offset >= 16'h4000 && offset < 16'h4000 + (NUM_HARTS * 8)) begin
-          for (i = 0; i < NUM_HARTS; i = i + 1) begin
-            if (offset[5:3] == i[2:0]) begin
-              mtimecmp_q[i] <= req_wdata_i;
-            end
-          end
         end else if (offset < (NUM_HARTS * 4)) begin
           for (i = 0; i < NUM_HARTS; i = i + 1) begin
             if (offset[3:2] == i[1:0]) begin

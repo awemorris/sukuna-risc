@@ -130,7 +130,6 @@ module sukuna_top #(
   reg                       core_req_write_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [3:0]                 core_req_source_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]     core_req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [CACHE_LINE_BITS-1:0] core_req_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   wire is_mmio = (core_req_paddr_w_q[PADDR_WIDTH-1:28] == {(PADDR_WIDTH-28){1'b0}});
 
@@ -144,19 +143,39 @@ module sukuna_top #(
   wire target_ready  = is_mmio ? mmio_req_ready : l2_cache_req_ready;
   wire core_req_busy = core_req_valid_q && !target_ready;
 
+  // 512-bit Core Request Write Data Buffer instantiated via sk_ram_ff macro
+  wire [CACHE_LINE_BITS-1:0] core_req_wdata_q;
+
+  sk_ram_ff #(
+    .DATA_WIDTH (CACHE_LINE_BITS),
+    .ADDR_WIDTH (1),
+    .DEPTH      (1),
+    .ZERO_REG0  (0)
+  ) u_core_req_wdata_ram (
+    .clk_i    (clk_i),
+    .rst_ni   (core_rst_n),
+    .wen_i    (!core_req_busy),
+    .waddr_i  (1'b0),
+    .wdata_i  (l2_req_wdata),
+    .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({CACHE_LINE_BITS{1'b0}}),
+    .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({CACHE_LINE_BITS{1'b0}}),
+    .raddr_a_i(1'b0),
+    .rdata_a_o(core_req_wdata_q),
+    .raddr_b_i(1'b0),
+    .rdata_b_o()
+  );
+
   always @(posedge clk_i or negedge core_rst_n) begin
     if (!core_rst_n) begin
       core_req_valid_q   <= 1'b0;
       core_req_write_q   <= 1'b0;
       core_req_source_q  <= 4'd0;
       core_req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
-      core_req_wdata_q   <= {CACHE_LINE_BITS{1'b0}};
     end else if (!core_req_busy) begin
       core_req_valid_q   <= l2_req_valid;
       core_req_write_q   <= l2_req_write;
       core_req_source_q  <= l2_req_source;
       core_req_paddr_w_q <= l2_req_paddr_w;
-      core_req_wdata_q   <= l2_req_wdata;
     end
   end
 

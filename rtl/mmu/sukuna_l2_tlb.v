@@ -64,18 +64,61 @@ module sukuna_l2_tlb #(
   reg [5:0]             set_idx_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [TAG_WIDTH-1:0]   vaddr_tag_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  // Flush tracking: clear all valid bits when flush asserted
-  reg [NUM_SETS-1:0]    way_valid_q [0:NUM_WAYS-1];
-  reg [1:0]             repl_way_q  [0:NUM_SETS-1];
+  // Flush tracking & replacement policy via library RAM macros (sk_ram_ff & sk_ram_dist)
+  wire [NUM_SETS-1:0] way_valid_out [0:NUM_WAYS-1];
+  wire [NUM_WAYS-1:0] way_valid_wen;
+  wire [NUM_SETS-1:0] way_valid_wdata [0:NUM_WAYS-1];
+  wire [1:0]          repl_way_rdata;
+
+  genvar gw;
+  generate
+    for (gw = 0; gw < NUM_WAYS; gw = gw + 1) begin : gen_l2_way_valid
+      assign way_valid_wen[gw] = flush_i || ((state_q == S_PTW_WAIT) && ptw_resp_valid_i && (repl_way_rdata == gw[1:0]));
+      assign way_valid_wdata[gw] = flush_i ? {NUM_SETS{1'b0}} : (way_valid_out[gw] | (64'd1 << set_idx_q));
+      sk_ram_ff #(
+        .DATA_WIDTH (NUM_SETS),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_way_valid_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (way_valid_wen[gw]),
+        .waddr_i  (1'b0),
+        .wdata_i  (way_valid_wdata[gw]),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({NUM_SETS{1'b0}}),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({NUM_SETS{1'b0}}),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(way_valid_out[gw]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+    end
+  endgenerate
+
+  sk_ram_dist #(
+    .DATA_WIDTH (2),
+    .ADDR_WIDTH (6),
+    .DEPTH      (NUM_SETS)
+  ) u_repl_way_ram (
+    .clk_i      (clk_i),
+    .rst_ni     (rst_ni),
+    .wen_i      ((state_q == S_PTW_WAIT) && ptw_resp_valid_i),
+    .waddr_i    (set_idx_q),
+    .wdata_i    (repl_way_rdata + 1'b1),
+    .ren_i      (1'b1),
+    .raddr_i    (set_idx_q),
+    .rdata_o    (repl_way_rdata)
+  );
 
   assign req_ready_o = (state_q == S_IDLE);
 
   // --------------------------------------------------------------------------
   // 4 Ways of sk_ram_dist
   // --------------------------------------------------------------------------
-  reg  [NUM_WAYS-1:0]       ram_wen;
-  reg  [5:0]                ram_waddr;
-  reg  [ENTRY_WIDTH-1:0]    ram_wdata;
+  reg  [NUM_WAYS-1:0]       ram_wen;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg  [5:0]                ram_waddr; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg  [ENTRY_WIDTH-1:0]    ram_wdata; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   wire [5:0]                ram_raddr = (state_q == S_IDLE) ? req_vaddr_i[17:12] : set_idx_q;
   wire                      ram_ren   = (state_q == S_IDLE && req_valid_i);
   wire [ENTRY_WIDTH-1:0]    ram_rdata [0:NUM_WAYS-1];
@@ -109,7 +152,7 @@ module sukuna_l2_tlb #(
 
   generate
     for (w = 0; w < NUM_WAYS; w = w + 1) begin : gen_hit_check
-      wire entry_valid = ram_rdata[w][ENTRY_WIDTH-1] && way_valid_q[w][set_idx_q];
+      wire entry_valid = ram_rdata[w][ENTRY_WIDTH-1] && way_valid_out[w][set_idx_q];
       wire entry_fault = ram_rdata[w][ENTRY_WIDTH-2];
       wire [TAG_WIDTH-1:0] entry_tag = ram_rdata[w][ENTRY_WIDTH-3 -: TAG_WIDTH];
       wire [PPN_WIDTH-1:0] entry_ppn = ram_rdata[w][PPN_WIDTH-1:0];
@@ -157,22 +200,12 @@ module sukuna_l2_tlb #(
       ram_wen           <= {NUM_WAYS{1'b0}};
       ram_waddr         <= 6'd0;
       ram_wdata         <= {ENTRY_WIDTH{1'b0}};
-
-      for (wy = 0; wy < NUM_WAYS; wy = wy + 1) begin
-        way_valid_q[wy] <= {NUM_SETS{1'b0}};
-      end
-      for (s = 0; s < NUM_SETS; s = s + 1) begin
-        repl_way_q[s]   <= 2'd0;
-      end
     end else begin
       resp_valid_o    <= 1'b0;
       ram_wen         <= {NUM_WAYS{1'b0}};
       ptw_req_valid_o <= 1'b0;
 
       if (flush_i) begin
-        for (wy = 0; wy < NUM_WAYS; wy = wy + 1) begin
-          way_valid_q[wy] <= {NUM_SETS{1'b0}};
-        end
         state_q <= S_IDLE;
       end else begin
         case (state_q)
@@ -206,11 +239,9 @@ module sukuna_l2_tlb #(
           S_PTW_WAIT: begin
             if (ptw_resp_valid_i) begin
               // PTW finished walk: write entry into L2-TLB and respond
-              ram_wen[repl_way_q[set_idx_q]] <= 1'b1;
-              ram_waddr                      <= set_idx_q;
-              ram_wdata                      <= {1'b1, ptw_resp_fault_i, vaddr_tag_q, ptw_resp_paddr_i[PADDR_WIDTH-1:12]};
-              way_valid_q[repl_way_q[set_idx_q]][set_idx_q] <= 1'b1;
-              repl_way_q[set_idx_q]          <= repl_way_q[set_idx_q] + 1'b1;
+              ram_wen[repl_way_rdata] <= 1'b1;
+              ram_waddr               <= set_idx_q;
+              ram_wdata               <= {1'b1, ptw_resp_fault_i, vaddr_tag_q, ptw_resp_paddr_i[PADDR_WIDTH-1:12]};
 
               // Forward response to L1-TLB
               resp_valid_o   <= 1'b1;

@@ -125,23 +125,32 @@ module sukuna_agu_eu #(
   wire is_alu_amo        = (s1_amo_type >= `AMO_SWAP && s1_amo_type <= `AMO_MAXU);
   wire sc_match          = res_valid_q && (res_paddr_w_q == store_paddr_w_q);
 
-  // Load Response Formatting
-  wire [7:0]  byte_data  = l1d_rdata_i[s1_addr_lsb_q*8 +: 8];
-  wire [15:0] half_data  = l1d_rdata_i[{s1_addr_lsb_q[2:1], 1'b0}*8 +: 16];
-  wire [31:0] word_data  = s1_addr_lsb_q[2] ? l1d_rdata_i[63:32] : l1d_rdata_i[31:0];
-  wire [63:0] dword_data = l1d_rdata_i;
+  // Load Response Formatting (Optimized 2-level alignment and sign extension)
+  reg [63:0] aligned_rdata;
+  always @(*) begin
+    case (s1_addr_lsb_q)
+      3'd0: aligned_rdata = l1d_rdata_i;
+      3'd1: aligned_rdata = {8'd0,  l1d_rdata_i[63:8]};
+      3'd2: aligned_rdata = {16'd0, l1d_rdata_i[63:16]};
+      3'd3: aligned_rdata = {24'd0, l1d_rdata_i[63:24]};
+      3'd4: aligned_rdata = {32'd0, l1d_rdata_i[63:32]};
+      3'd5: aligned_rdata = {40'd0, l1d_rdata_i[63:40]};
+      3'd6: aligned_rdata = {48'd0, l1d_rdata_i[63:48]};
+      3'd7: aligned_rdata = {56'd0, l1d_rdata_i[63:56]};
+    endcase
+  end
+
+  wire byte_sign = aligned_rdata[7]  & !s1_op_q[2];
+  wire half_sign = aligned_rdata[15] & !s1_op_q[2];
+  wire word_sign = aligned_rdata[31] & !s1_op_q[2];
 
   reg [XLEN-1:0] formatted_rdata;
   always @(*) begin
-    case (s1_op_q[2:0])
-      3'b000:  formatted_rdata = {{56{byte_data[7]}}, byte_data};
-      3'b100:  formatted_rdata = {{56{1'b0}}, byte_data};
-      3'b001:  formatted_rdata = {{48{half_data[15]}}, half_data};
-      3'b101:  formatted_rdata = {{48{1'b0}}, half_data};
-      3'b010:  formatted_rdata = {{32{word_data[31]}}, word_data};
-      3'b110:  formatted_rdata = {{32{1'b0}}, word_data};
-      3'b011:  formatted_rdata = dword_data;
-      default: formatted_rdata = dword_data;
+    case (s1_op_q[1:0])
+      2'b00:   formatted_rdata = {{56{byte_sign}}, aligned_rdata[7:0]};
+      2'b01:   formatted_rdata = {{48{half_sign}}, aligned_rdata[15:0]};
+      2'b10:   formatted_rdata = {{32{word_sign}}, aligned_rdata[31:0]};
+      default: formatted_rdata = aligned_rdata;
     endcase
   end
 

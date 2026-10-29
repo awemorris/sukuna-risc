@@ -16,12 +16,12 @@ module sukuna_cfp_eu #(
   input  wire [4:0]       req_rd_i,
   input  wire [XLEN-1:0]  req_src1_i,
   input  wire [XLEN-1:0]  req_src2_i,
-  output reg              busy_o,
+  output reg              busy_o,         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  output reg              resp_valid_o,
-  output reg  [1:0]       resp_hart_id_o,
-  output reg  [4:0]       resp_rd_o,
-  output reg  [XLEN-1:0]  resp_data_o
+  output reg              resp_valid_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [1:0]       resp_hart_id_o, /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [4:0]       resp_rd_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [XLEN-1:0]  resp_data_o     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 );
 
   // Simple multi-cycle dummy counter

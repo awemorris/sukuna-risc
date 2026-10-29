@@ -32,13 +32,13 @@ module sukuna_l2_cache #(
 
   output reg                        resp_valid_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [3:0]                 resp_source_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [CACHE_LINE_BITS-1:0] resp_rdata_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output wire [CACHE_LINE_BITS-1:0] resp_rdata_o,
 
   // Memory interface to BIU (AXI4 bridge) on L2 miss/evict
   output reg                        mem_req_valid_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg                        mem_req_write_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [PADDR_WIDTH-1:2]     mem_req_paddr_w_o, /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [CACHE_LINE_BITS-1:0] mem_req_wdata_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output wire [CACHE_LINE_BITS-1:0] mem_req_wdata_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   input  wire                       mem_req_ready_i,
 
   input  wire                       mem_resp_valid_i,
@@ -68,7 +68,9 @@ module sukuna_l2_cache #(
   reg [3:0]                 req_src_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [TAG_WIDTH-1:0]       req_tag_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]     req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [CACHE_LINE_BITS-1:0] req_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  // 512-bit Request Write Data Buffer instantiated via sk_ram_ff macro
+  wire [CACHE_LINE_BITS-1:0] req_wdata_q;
 
   // State Machine
   localparam S_IDLE   = 2'd0;
@@ -84,12 +86,92 @@ module sukuna_l2_cache #(
   reg [WAY_BITS-1:0] victim_ptr_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   localparam integer MAX_WAY_IDX = WAYS - 1;
 
-  // Per-way valid and dirty bit register arrays (reset to 0)
-  reg [SETS-1:0] way_valid_q [0:WAYS-1];
-  reg [SETS-1:0] way_dirty_q [0:WAYS-1];
-  integer wy;
-
   wire is_busy;
+
+  sk_ram_ff #(
+    .DATA_WIDTH (CACHE_LINE_BITS),
+    .ADDR_WIDTH (1),
+    .DEPTH      (1),
+    .ZERO_REG0  (0)
+  ) u_req_wdata_ram (
+    .clk_i    (clk_i),
+    .rst_ni   (rst_ni),
+    .wen_i    (!is_busy),
+    .waddr_i  (1'b0),
+    .wdata_i  (req_wdata_i),
+    .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({CACHE_LINE_BITS{1'b0}}),
+    .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({CACHE_LINE_BITS{1'b0}}),
+    .raddr_a_i(1'b0),
+    .rdata_a_o(req_wdata_q),
+    .raddr_b_i(1'b0),
+    .rdata_b_o()
+  );
+
+  // Per-way valid and dirty bit storage instantiated via sk_ram_ff
+  wire [SETS-1:0] way_valid_out [0:WAYS-1];
+  wire [WAYS-1:0] way_valid_wen;
+  wire [SETS-1:0] way_valid_wdata [0:WAYS-1];
+
+  wire [SETS-1:0] way_dirty_out [0:WAYS-1];
+  wire [WAYS-1:0] way_dirty_wen;
+  wire [SETS-1:0] way_dirty_wdata [0:WAYS-1];
+
+  wire [WAYS-1:0] way_hit;
+
+  genvar gw;
+  generate
+    for (gw = 0; gw < WAYS; gw = gw + 1) begin : gen_l2_valid_dirty
+      wire refill_hit = (state_q == S_REFILL) && mem_resp_valid_i && (victim_ptr_q == gw[WAY_BITS-1:0]);
+      wire write_hit  = (state_q == S_IDLE) && req_valid_q && req_write_q && way_hit[gw];
+
+      assign way_valid_wen[gw]   = refill_hit;
+      assign way_valid_wdata[gw] = way_valid_out[gw] | ({{(SETS-1){1'b0}}, 1'b1} << req_paddr_w_q[5+INDEX_BITS:6]);
+
+      assign way_dirty_wen[gw]   = refill_hit || write_hit;
+      assign way_dirty_wdata[gw] = refill_hit ? (req_write_q ? (way_dirty_out[gw] | ({{(SETS-1){1'b0}}, 1'b1} << req_paddr_w_q[5+INDEX_BITS:6])) :
+                                                              (way_dirty_out[gw] & ~({{(SETS-1){1'b0}}, 1'b1} << req_paddr_w_q[5+INDEX_BITS:6]))) :
+                                   write_hit  ? (way_dirty_out[gw] | ({{(SETS-1){1'b0}}, 1'b1} << req_paddr_w_q[5+INDEX_BITS:6])) :
+                                                way_dirty_out[gw];
+
+      sk_ram_ff #(
+        .DATA_WIDTH (SETS),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_way_valid_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (way_valid_wen[gw]),
+        .waddr_i  (1'b0),
+        .wdata_i  (way_valid_wdata[gw]),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({SETS{1'b0}}),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({SETS{1'b0}}),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(way_valid_out[gw]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+
+      sk_ram_ff #(
+        .DATA_WIDTH (SETS),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_way_dirty_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (way_dirty_wen[gw]),
+        .waddr_i  (1'b0),
+        .wdata_i  (way_dirty_wdata[gw]),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({SETS{1'b0}}),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({SETS{1'b0}}),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(way_dirty_out[gw]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+    end
+  endgenerate
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -98,14 +180,12 @@ module sukuna_l2_cache #(
       req_src_q     <= 4'd0;
       req_tag_q     <= {TAG_WIDTH{1'b0}};
       req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
-      req_wdata_q   <= {CACHE_LINE_BITS{1'b0}};
     end else if (!is_busy) begin
       req_valid_q   <= req_valid_i;
       req_write_q   <= req_write_i;
       req_src_q     <= req_source_i;
       req_tag_q     <= req_tag;
       req_paddr_w_q <= req_paddr_w_i;
-      req_wdata_q   <= req_wdata_i;
     end else if (state_q == S_REFILL && mem_resp_valid_i) begin
       req_valid_q   <= 1'b0;
     end
@@ -116,7 +196,6 @@ module sukuna_l2_cache #(
   // --------------------------------------------------------------------------
   wire [TAG_WIDTH+1:0]       tag_rdata [0:WAYS-1]; // {dirty, valid, tag}
   wire [CACHE_LINE_BITS-1:0] data_rdata [0:WAYS-1];
-  wire [WAYS-1:0]            way_hit;
 
   genvar w;
   generate
@@ -124,24 +203,21 @@ module sukuna_l2_cache #(
       wire way_refill_wen = (state_q == S_REFILL) && mem_resp_valid_i && (victim_ptr_q == w[WAY_BITS-1:0]);
       wire way_write_hit  = (state_q == S_IDLE) && req_valid_q && req_write_q && way_hit[w];
 
-      // Tag Array ({dirty, valid, tag})
-      sk_ram_bram #(
-        .DATA_WIDTH     (TAG_WIDTH + 2),
-        .ADDR_WIDTH     (INDEX_BITS),
-        .DEPTH          (SETS),
-        .PIPELINE_STAGES(1),
-        .BYTE_WRITE_EN  (0)
+      // Tag Array ({dirty, valid, tag}) - Distributed RAM for fast 1-cycle tag comparison
+      sk_ram_dist #(
+        .DATA_WIDTH (TAG_WIDTH + 2),
+        .ADDR_WIDTH (INDEX_BITS),
+        .DEPTH      (SETS)
       ) u_l2_tag_ram (
-        .clk_i  (clk_i),
-        .rst_ni (rst_ni),
-        .wen_i  (way_refill_wen || way_write_hit),
-        .wstrb_i(1'b1),
-        .waddr_i(way_refill_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index),
-        .wdata_i(way_write_hit ? {1'b1, 1'b1, req_tag_q} :
-                 way_refill_wen ? {req_write_q, 1'b1, req_tag_q} : {(TAG_WIDTH+2){1'b0}}),
-        .ren_i  (req_valid_i),
-        .raddr_i(req_index),
-        .rdata_o(tag_rdata[w])
+        .clk_i   (clk_i),
+        .rst_ni  (rst_ni),
+        .wen_i   (way_refill_wen || way_write_hit),
+        .waddr_i (way_refill_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index),
+        .wdata_i (way_write_hit ? {1'b1, 1'b1, req_tag_q} :
+                  way_refill_wen ? {req_write_q, 1'b1, req_tag_q} : {(TAG_WIDTH+2){1'b0}}),
+        .ren_i   (req_valid_i),
+        .raddr_i (req_index),
+        .rdata_o (tag_rdata[w])
       );
 
       // Data Array
@@ -163,7 +239,7 @@ module sukuna_l2_cache #(
         .rdata_o(data_rdata[w])
       );
 
-      assign way_hit[w] = req_valid_q && way_valid_q[w][req_paddr_w_q[5+INDEX_BITS:6]] &&
+      assign way_hit[w] = req_valid_q && way_valid_out[w][req_paddr_w_q[5+INDEX_BITS:6]] &&
                           (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
     end
   endgenerate
@@ -179,6 +255,31 @@ module sukuna_l2_cache #(
     end
   end
 
+  wire [CACHE_LINE_BITS-1:0] resp_data_next = (state_q == S_REFILL) ? mem_resp_rdata_i : hit_data;
+  wire resp_rdata_wen = (state_q == S_IDLE && req_valid_q && hit && !req_write_q) ||
+                        (state_q == S_REFILL && mem_resp_valid_i && !req_write_q);
+
+  sk_ram_ff #(
+    .DATA_WIDTH (CACHE_LINE_BITS),
+    .ADDR_WIDTH (1),
+    .DEPTH      (1),
+    .ZERO_REG0  (0)
+  ) u_resp_rdata_ram (
+    .clk_i    (clk_i),
+    .rst_ni   (rst_ni),
+    .wen_i    (resp_rdata_wen),
+    .waddr_i  (1'b0),
+    .wdata_i  (resp_data_next),
+    .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({CACHE_LINE_BITS{1'b0}}),
+    .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({CACHE_LINE_BITS{1'b0}}),
+    .raddr_a_i(1'b0),
+    .rdata_a_o(resp_rdata_o),
+    .raddr_b_i(1'b0),
+    .rdata_b_o()
+  );
+
+  assign mem_req_wdata_o = data_rdata[victim_ptr_q];
+
   wire will_miss = (state_q == S_IDLE) && req_valid_q && !hit;
   assign is_busy = (state_q != S_IDLE) || will_miss;
   assign req_ready_o = !is_busy;
@@ -186,8 +287,8 @@ module sukuna_l2_cache #(
   // --------------------------------------------------------------------------
   // Miss Eviction & Refill State Machine
   // --------------------------------------------------------------------------
-  wire victim_valid = way_valid_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]];
-  wire victim_dirty = victim_valid && way_dirty_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]];
+  wire victim_valid = way_valid_out[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]];
+  wire victim_dirty = victim_valid && way_dirty_out[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]];
   wire [TAG_WIDTH-1:0] victim_tag = tag_rdata[victim_ptr_q][TAG_WIDTH-1:0];
 
   always @(posedge clk_i or negedge rst_ni) begin
@@ -196,15 +297,9 @@ module sukuna_l2_cache #(
       victim_ptr_q      <= {WAY_BITS{1'b0}};
       resp_valid_o      <= 1'b0;
       resp_source_o     <= 4'd0;
-      resp_rdata_o      <= {CACHE_LINE_BITS{1'b0}};
       mem_req_valid_o   <= 1'b0;
       mem_req_write_o   <= 1'b0;
       mem_req_paddr_w_o <= {(PADDR_WIDTH-2){1'b0}};
-      mem_req_wdata_o   <= {CACHE_LINE_BITS{1'b0}};
-      for (wy = 0; wy < WAYS; wy = wy + 1) begin
-        way_valid_q[wy] <= {SETS{1'b0}};
-        way_dirty_q[wy] <= {SETS{1'b0}};
-      end
     end else begin
       resp_valid_o    <= 1'b0;
       mem_req_valid_o <= 1'b0;
@@ -214,14 +309,9 @@ module sukuna_l2_cache #(
           if (req_valid_q) begin
             if (hit) begin
               // Hit: for read, respond immediately; for write, written in same cycle
-              if (req_write_q) begin
-                for (wy = 0; wy < WAYS; wy = wy + 1) begin
-                  if (way_hit[wy]) way_dirty_q[wy][req_paddr_w_q[5+INDEX_BITS:6]] <= 1'b1;
-                end
-              end else begin
+              if (!req_write_q) begin
                 resp_valid_o  <= 1'b1;
                 resp_source_o <= req_src_q;
-                resp_rdata_o  <= hit_data;
               end
             end else begin
               // Miss
@@ -230,7 +320,6 @@ module sukuna_l2_cache #(
                 mem_req_valid_o   <= 1'b1;
                 mem_req_write_o   <= 1'b1;
                 mem_req_paddr_w_o <= {victim_tag, req_paddr_w_q[5+INDEX_BITS:6], 4'b0000};
-                mem_req_wdata_o   <= data_rdata[victim_ptr_q];
                 state_q           <= S_EVICT;
               end else begin
                 // Refill clean line from memory
@@ -259,14 +348,11 @@ module sukuna_l2_cache #(
           end
           if (mem_resp_valid_i) begin
             mem_req_valid_o <= 1'b0;
-            way_valid_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] <= 1'b1;
-            way_dirty_q[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] <= req_write_q;
             victim_ptr_q    <= (victim_ptr_q == MAX_WAY_IDX[WAY_BITS-1:0]) ? {WAY_BITS{1'b0}} : victim_ptr_q + 1'b1;
 
             if (!req_write_q) begin
               resp_valid_o  <= 1'b1;
               resp_source_o <= req_src_q;
-              resp_rdata_o  <= mem_resp_rdata_i;
             end
             state_q <= S_IDLE;
           end

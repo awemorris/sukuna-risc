@@ -31,19 +31,19 @@ module sk_div #(
   localparam S_CALC = 2'b01;
   localparam S_DONE = 2'b10;
 
-  reg [1:0] state_q;
+  reg [1:0] state_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   assign div_by_zero_o = (divisor_i == {WIDTH{1'b0}});
 
   wire is_overflow = signed_mode_i && (dividend_i == {1'b1, {(WIDTH-1){1'b0}}}) && (divisor_i == {WIDTH{1'b1}});
 
   // Internal registers for multi-cycle iteration
-  reg [WIDTH-1:0]   acc_q;
-  reg [WIDTH-1:0]   quo_q;
-  reg [WIDTH-1:0]   div_q;
-  reg [5:0]         cnt_q;
-  reg               neg_quo_q;
-  reg               neg_rem_q;
+  reg [WIDTH-1:0]   acc_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [WIDTH-1:0]   quo_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [WIDTH-1:0]   div_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [5:0]         cnt_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg               neg_quo_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg               neg_rem_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // Next-step trial subtraction (single 64-bit adder, ~0.8 ns)
   wire [WIDTH:0] next_acc_trial = {acc_q[WIDTH-2:0], quo_q[WIDTH-1]};

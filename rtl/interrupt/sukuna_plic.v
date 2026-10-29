@@ -36,21 +36,108 @@ module sukuna_plic #(
   localparam NUM_CONTEXTS = NUM_HARTS * 2; // Context 0..2 = M-mode, Context 3..5 = S-mode
 
   // --------------------------------------------------------------------------
-  // PLIC Storage Registers
+  // PLIC Storage Registers (instantiated via sk_ram_ff macros)
   // --------------------------------------------------------------------------
-  reg [2:0]             priority_q [0:NUM_SOURCES-1]; // Priority per source (0..7)
   reg [NUM_SOURCES-1:0] pending_q;                    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [NUM_SOURCES-1:0] enable_q   [0:NUM_CONTEXTS-1]; // Interrupt enable per context
-  reg [2:0]             threshold_q[0:NUM_CONTEXTS-1]; // Priority threshold per context
+  reg [NUM_CONTEXTS-1:0] context_irq_q;               /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   assign req_ready_o = 1'b1;
+
+  wire [23:0] offset = req_addr_i[23:0];
+  wire [2:0]  ctx_idx = offset[14:12];
+
+  // Source Priority RAMs (32 sources of 3 bits)
+  wire [2:0] priority_out [0:NUM_SOURCES-1];
+  wire [NUM_SOURCES-1:0] priority_wen;
+  genvar gpr;
+  generate
+    assign priority_out[0] = 3'd0;
+    for (gpr = 1; gpr < NUM_SOURCES; gpr = gpr + 1) begin : gen_priority_ram
+      assign priority_wen[gpr] = req_valid_i && req_write_i && (offset < 24'h001000) && (offset[6:2] == gpr[4:0]);
+      sk_ram_ff #(
+        .DATA_WIDTH (3),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_prio_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (priority_wen[gpr]),
+        .waddr_i  (1'b0),
+        .wdata_i  (req_wdata_i[2:0]),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i(3'd0),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i(3'd0),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(priority_out[gpr]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+    end
+  endgenerate
+
+  // Context Enable RAMs (6 contexts of 32 bits)
+  wire [NUM_SOURCES-1:0] enable_out [0:NUM_CONTEXTS-1];
+  wire [NUM_CONTEXTS-1:0] enable_wen;
+  genvar gen_en;
+  generate
+    for (gen_en = 0; gen_en < NUM_CONTEXTS; gen_en = gen_en + 1) begin : gen_enable_ram
+      assign enable_wen[gen_en] = req_valid_i && req_write_i &&
+                                  (offset >= 24'h002000 && offset < 24'h002000 + (NUM_CONTEXTS * 32)) &&
+                                  (offset[9:7] == gen_en[2:0]);
+      sk_ram_ff #(
+        .DATA_WIDTH (NUM_SOURCES),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_enable_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (enable_wen[gen_en]),
+        .waddr_i  (1'b0),
+        .wdata_i  ({req_wdata_i[NUM_SOURCES-1:1], 1'b0}),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({NUM_SOURCES{1'b0}}),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({NUM_SOURCES{1'b0}}),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(enable_out[gen_en]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+    end
+  endgenerate
+
+  // Context Threshold RAMs (6 contexts of 3 bits)
+  wire [2:0] threshold_out [0:NUM_CONTEXTS-1];
+  wire [NUM_CONTEXTS-1:0] threshold_wen;
+  genvar gth;
+  generate
+    for (gth = 0; gth < NUM_CONTEXTS; gth = gth + 1) begin : gen_threshold_ram
+      assign threshold_wen[gth] = req_valid_i && req_write_i && (offset >= 24'h200000) && !offset[2] && (ctx_idx == gth[2:0]);
+      sk_ram_ff #(
+        .DATA_WIDTH (3),
+        .ADDR_WIDTH (1),
+        .DEPTH      (1),
+        .ZERO_REG0  (0)
+      ) u_thresh_ram (
+        .clk_i    (clk_i),
+        .rst_ni   (rst_ni),
+        .wen_i    (threshold_wen[gth]),
+        .waddr_i  (1'b0),
+        .wdata_i  (req_wdata_i[2:0]),
+        .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i(3'd0),
+        .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i(3'd0),
+        .raddr_a_i(1'b0),
+        .rdata_a_o(threshold_out[gth]),
+        .raddr_b_i(1'b0),
+        .rdata_b_o()
+      );
+    end
+  endgenerate
 
   // --------------------------------------------------------------------------
   // Interrupt Arbitration & Notification per Context (Binary Tournament Tree)
   // --------------------------------------------------------------------------
-  reg [NUM_CONTEXTS-1:0] context_irq_q;
-  reg [4:0]              context_max_id_q   [0:NUM_CONTEXTS-1];
-  reg [2:0]              context_max_prio_q [0:NUM_CONTEXTS-1];
+  wire [4:0] context_max_id   [0:NUM_CONTEXTS-1];
+  wire [2:0] context_max_prio [0:NUM_CONTEXTS-1];
 
   function [7:0] plic_cand_max;
     input [7:0] a; // [7:5] = prio, [4:0] = id
@@ -77,8 +164,6 @@ module sukuna_plic #(
   wire [7:0] l1_cand [0:NUM_CONTEXTS-1][0:15];
   wire [7:0] l2_cand [0:NUM_CONTEXTS-1][0:7];
 
-  reg  [7:0] s1_cand_q [0:NUM_CONTEXTS-1][0:7];
-
   wire [7:0] l3_cand [0:NUM_CONTEXTS-1][0:3];
   wire [7:0] l4_cand [0:NUM_CONTEXTS-1][0:1];
   wire [7:0] l5_winner [0:NUM_CONTEXTS-1];
@@ -86,11 +171,19 @@ module sukuna_plic #(
   genvar gc, gs;
   generate
     for (gc = 0; gc < NUM_CONTEXTS; gc = gc + 1) begin : gen_ctx_tree
+      // Tournament tree pipeline registers (each <= 64 bits with directive)
+      reg [63:0] s1_cand_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+      reg [4:0]  ctx_max_id_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+      reg [2:0]  ctx_max_prio_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+      assign context_max_id[gc]   = ctx_max_id_q;
+      assign context_max_prio[gc] = ctx_max_prio_q;
+
       // Source 0 is reserved (always 0 priority)
       assign l0_cand[gc][0] = 8'd0;
       for (gs = 1; gs < 32; gs = gs + 1) begin : gen_l0
-        wire act = pending_q[gs] && enable_q[gc][gs] && (priority_q[gs] > threshold_q[gc]);
-        assign l0_cand[gc][gs] = act ? {priority_q[gs], gs[4:0]} : 8'd0;
+        wire act = pending_q[gs] && enable_out[gc][gs] && (priority_out[gs] > threshold_out[gc]);
+        assign l0_cand[gc][gs] = act ? {priority_out[gs], gs[4:0]} : 8'd0;
       end
 
       // Level 1: 32 -> 16
@@ -105,7 +198,7 @@ module sukuna_plic #(
 
       // Level 3: 8 -> 4 (takes Stage 1 registered candidates)
       for (gs = 0; gs < 4; gs = gs + 1) begin : gen_l3
-        assign l3_cand[gc][gs] = plic_cand_max(s1_cand_q[gc][2*gs], s1_cand_q[gc][2*gs+1]);
+        assign l3_cand[gc][gs] = plic_cand_max(s1_cand_q[(2*gs)*8 +: 8], s1_cand_q[(2*gs+1)*8 +: 8]);
       end
 
       // Level 4: 4 -> 2
@@ -115,30 +208,29 @@ module sukuna_plic #(
 
       // Level 5: 2 -> 1
       assign l5_winner[gc] = plic_cand_max(l4_cand[gc][0], l4_cand[gc][1]);
+
+      always @(posedge clk_i or negedge rst_ni) begin
+        if (!rst_ni) begin
+          s1_cand_q      <= 64'd0;
+          ctx_max_id_q   <= 5'd0;
+          ctx_max_prio_q <= 3'd0;
+        end else begin
+          s1_cand_q      <= {l2_cand[gc][7], l2_cand[gc][6], l2_cand[gc][5], l2_cand[gc][4],
+                             l2_cand[gc][3], l2_cand[gc][2], l2_cand[gc][1], l2_cand[gc][0]};
+          ctx_max_prio_q <= l5_winner[gc][7:5];
+          ctx_max_id_q   <= l5_winner[gc][4:0];
+        end
+      end
     end
   endgenerate
 
-  integer c, cs;
+  integer c;
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       context_irq_q <= {NUM_CONTEXTS{1'b0}};
-      for (c = 0; c < NUM_CONTEXTS; c = c + 1) begin
-        context_max_id_q[c]   <= 5'd0;
-        context_max_prio_q[c] <= 3'd0;
-        for (cs = 0; cs < 8; cs = cs + 1) begin
-          s1_cand_q[c][cs] <= 8'd0;
-        end
-      end
     end else begin
       for (c = 0; c < NUM_CONTEXTS; c = c + 1) begin
-        // Pipeline Stage 1 registers (8 candidates)
-        for (cs = 0; cs < 8; cs = cs + 1) begin
-          s1_cand_q[c][cs] <= l2_cand[c][cs];
-        end
-        // Pipeline Stage 2 registers (final winner)
-        context_max_prio_q[c] <= l5_winner[c][7:5];
-        context_max_id_q[c]   <= l5_winner[c][4:0];
-        context_irq_q[c]      <= (l5_winner[c][7:5] > 3'd0);
+        context_irq_q[c] <= (l5_winner[c][7:5] > 3'd0);
       end
     end
   end
@@ -155,9 +247,6 @@ module sukuna_plic #(
   // --------------------------------------------------------------------------
   // MMIO Address Decoding (Offset from 0x0C00_0000)
   // --------------------------------------------------------------------------
-  wire [23:0] offset = req_addr_i[23:0];
-  wire [2:0]  ctx_idx = offset[14:12]; // Context index from 0x200000 block
-
   reg [63:0] rdata_comb;
   integer k;
   always @(*) begin
@@ -165,7 +254,7 @@ module sukuna_plic #(
     if (offset < 24'h001000) begin
       // Source Priorities: 0x000000 - 0x00007C
       for (k = 1; k < NUM_SOURCES; k = k + 1) begin
-        if (offset[6:2] == k[4:0]) rdata_comb = {61'd0, priority_q[k]};
+        if (offset[6:2] == k[4:0]) rdata_comb = {61'd0, priority_out[k]};
       end
     end else if (offset == 24'h001000) begin
       // Pending Bits
@@ -173,17 +262,17 @@ module sukuna_plic #(
     end else if (offset >= 24'h002000 && offset < 24'h002000 + (NUM_CONTEXTS * 32)) begin
       // Context Enables: 0x002000 + 0x80 * context
       if (offset[9:7] < NUM_CONTEXTS) begin
-        rdata_comb = {32'd0, enable_q[offset[9:7]]};
+        rdata_comb = {32'd0, enable_out[offset[9:7]]};
       end
     end else if (offset >= 24'h200000) begin
       // Threshold and Claim: 0x200000 + 0x1000 * context
       if (ctx_idx < NUM_CONTEXTS) begin
         if (offset[2]) begin
           // Claim Read (offset + 4)
-          rdata_comb = {59'd0, context_max_id_q[ctx_idx]};
+          rdata_comb = {59'd0, context_max_id[ctx_idx]};
         end else begin
           // Threshold (offset + 0)
-          rdata_comb = {61'd0, threshold_q[ctx_idx]};
+          rdata_comb = {61'd0, threshold_out[ctx_idx]};
         end
       end
     end
@@ -192,19 +281,11 @@ module sukuna_plic #(
   // --------------------------------------------------------------------------
   // Register Updates & External Interrupt Latching
   // --------------------------------------------------------------------------
-  integer ci, si;
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       pending_q    <= {NUM_SOURCES{1'b0}};
       resp_valid_o <= 1'b0;
       resp_rdata_o <= {XLEN{1'b0}};
-      for (si = 0; si < NUM_SOURCES; si = si + 1) begin
-        priority_q[si] <= 3'd0;
-      end
-      for (ci = 0; ci < NUM_CONTEXTS; ci = ci + 1) begin
-        enable_q[ci]    <= {NUM_SOURCES{1'b0}};
-        threshold_q[ci] <= 3'd0;
-      end
     end else begin
       // Latch external interrupt lines into pending bits
       pending_q <= (pending_q | ext_irq_i) & ~{NUM_SOURCES{1'b0}};
@@ -216,33 +297,8 @@ module sukuna_plic #(
 
       // Handle Claim (clears claimed interrupt pending bit on read)
       if (req_valid_i && !req_write_i && (offset >= 24'h200000) && offset[2]) begin
-        if (ctx_idx < NUM_CONTEXTS && (context_max_id_q[ctx_idx] != 5'd0)) begin
-          pending_q[context_max_id_q[ctx_idx]] <= 1'b0;
-        end
-      end
-
-      // Handle MMIO Writes
-      if (req_valid_i && req_write_i) begin
-        if (offset < 24'h001000) begin
-          // Write Source Priority
-          for (si = 1; si < NUM_SOURCES; si = si + 1) begin
-            if (offset[6:2] == si[4:0]) priority_q[si] <= req_wdata_i[2:0];
-          end
-        end else if (offset >= 24'h002000 && offset < 24'h002000 + (NUM_CONTEXTS * 32)) begin
-          // Write Context Enables
-          if (offset[9:7] < NUM_CONTEXTS) begin
-            enable_q[offset[9:7]] <= req_wdata_i[NUM_SOURCES-1:0];
-            enable_q[offset[9:7]][0] <= 1'b0;
-          end
-        end else if (offset >= 24'h200000) begin
-          if (ctx_idx < NUM_CONTEXTS) begin
-            if (offset[2]) begin
-              // Complete Write: re-enables / acks completion
-            end else begin
-              // Threshold Write
-              threshold_q[ctx_idx] <= req_wdata_i[2:0];
-            end
-          end
+        if (ctx_idx < NUM_CONTEXTS && (context_max_id[ctx_idx] != 5'd0)) begin
+          pending_q[context_max_id[ctx_idx]] <= 1'b0;
         end
       end
     end
