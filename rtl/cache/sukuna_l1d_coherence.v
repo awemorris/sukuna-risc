@@ -45,19 +45,25 @@ module sukuna_l1d_coherence #(
     end
   end
 
-  // Snoop broadcast generation
-  always @(*) begin
-    snoop_req_valid_o  = {NUM_HARTS{1'b0}};
-    snoop_invalidate_o = {NUM_HARTS{1'b0}};
-    snoop_paddr_w_o    = {(NUM_HARTS*(PADDR_WIDTH-2)){1'b0}};
+  // Snoop broadcast generation (Registered 1-cycle coherence pipeline)
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      snoop_req_valid_o  <= {NUM_HARTS{1'b0}};
+      snoop_invalidate_o <= {NUM_HARTS{1'b0}};
+      snoop_paddr_w_o    <= {(NUM_HARTS*(PADDR_WIDTH-2)){1'b0}};
+    end else begin
+      snoop_req_valid_o  <= {NUM_HARTS{1'b0}};
+      snoop_invalidate_o <= {NUM_HARTS{1'b0}};
+      snoop_paddr_w_o    <= {(NUM_HARTS*(PADDR_WIDTH-2)){1'b0}};
 
-    if (writer_valid) begin
-      for (j = 0; j < NUM_HARTS; j = j + 1) begin
-        if (j[1:0] != active_writer) begin
-          snoop_req_valid_o[j]  = 1'b1;
-          snoop_invalidate_o[j] = 1'b1;
-          snoop_paddr_w_o[j*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)] =
-            l1d_write_paddr_w_i[active_writer*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)];
+      if (writer_valid) begin
+        for (j = 0; j < NUM_HARTS; j = j + 1) begin
+          if (j[1:0] != active_writer) begin
+            snoop_req_valid_o[j]  <= 1'b1;
+            snoop_invalidate_o[j] <= 1'b1;
+            snoop_paddr_w_o[j*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)] <=
+              l1d_write_paddr_w_i[active_writer*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)];
+          end
         end
       end
     end

@@ -55,6 +55,8 @@ module sukuna_l1_tlb #(
   // Latch refill request address so refill matches the missed address
   reg [VADDR_WIDTH-1:2]      pending_vaddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg                        refill_busy_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                        refill_req_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [VADDR_WIDTH-1:2]      refill_vaddr_w_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // --------------------------------------------------------------------------
   // Address & Mode Decode
@@ -133,9 +135,9 @@ module sukuna_l1_tlb #(
   // Page Fault: canonical address error or entry marked as fault
   assign page_fault_o = lookup_valid_i && !is_bare && (canonical_fault || (tlb_hit && hit_entry_fault));
 
-  // Refill request to L2-TLB on Sv39 miss
-  assign refill_req_o     = lookup_valid_i && !is_bare && !tlb_hit && !canonical_fault && !refill_busy_q;
-  assign refill_vaddr_w_o = vaddr_w_i;
+  // Refill request to L2-TLB on Sv39 miss (Registered to break cross-stage combinational paths)
+  assign refill_req_o     = refill_req_q;
+  assign refill_vaddr_w_o = refill_vaddr_w_q;
 
   // --------------------------------------------------------------------------
   // Sequential State & Entry Refill / Flush Management
@@ -148,6 +150,8 @@ module sukuna_l1_tlb #(
       repl_ptr_q        <= 3'd0;
       pending_vaddr_w_q <= {(VADDR_WIDTH-2){1'b0}};
       refill_busy_q     <= 1'b0;
+      refill_req_q      <= 1'b0;
+      refill_vaddr_w_q  <= {(VADDR_WIDTH-2){1'b0}};
       for (j = 0; j < NUM_ENTRIES; j = j + 1) begin
         entry_vpn_q[j]   <= 27'd0;
         entry_ppn_q[j]   <= {(PADDR_WIDTH-12){1'b0}};
@@ -157,14 +161,19 @@ module sukuna_l1_tlb #(
     end else begin
       // SFENCE.VMA Flush
       if (flush_i) begin
-        entry_valid_q <= {NUM_ENTRIES{1'b0}};
-        entry_fault_q <= {NUM_ENTRIES{1'b0}};
-        refill_busy_q <= 1'b0;
+        entry_valid_q    <= {NUM_ENTRIES{1'b0}};
+        entry_fault_q    <= {NUM_ENTRIES{1'b0}};
+        refill_busy_q    <= 1'b0;
+        refill_req_q     <= 1'b0;
       end else begin
-        // Track outstanding refill
-        if (refill_req_o) begin
+        // Track outstanding refill (Registered request)
+        if (lookup_valid_i && !is_bare && !tlb_hit && !canonical_fault && !refill_busy_q) begin
+          refill_req_q      <= 1'b1;
           refill_busy_q     <= 1'b1;
           pending_vaddr_w_q <= vaddr_w_i;
+          refill_vaddr_w_q  <= vaddr_w_i;
+        end else begin
+          refill_req_q      <= 1'b0;
         end
 
         // Refill Response Arrival

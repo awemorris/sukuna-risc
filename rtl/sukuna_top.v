@@ -124,30 +124,56 @@ module sukuna_top #(
 
   // --------------------------------------------------------------------------
   // Core Memory Request Router: MMIO (PLIC & CLINT) vs Shared L2 Cache
+  // Registered pipeline stage decouples Sukuna Core boundary from L2/MMIO logic
   // --------------------------------------------------------------------------
-  wire is_mmio = (l2_req_paddr_w[PADDR_WIDTH-1:28] == {(PADDR_WIDTH-28){1'b0}});
+  reg                       core_req_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                       core_req_write_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [3:0]                 core_req_source_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [PADDR_WIDTH-1:2]     core_req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [CACHE_LINE_BITS-1:0] core_req_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  wire mmio_req_valid  = l2_req_valid && is_mmio;
-  wire cache_req_valid = l2_req_valid && !is_mmio;
+  wire is_mmio = (core_req_paddr_w_q[PADDR_WIDTH-1:28] == {(PADDR_WIDTH-28){1'b0}});
 
   wire mmio_req_ready, mmio_resp_valid;
-  wire [XLEN-1:0] mmio_resp_rdata;
+  wire [XLEN-1:0]            mmio_resp_rdata;
+  wire                       l2_cache_req_ready;
+  wire                       l2_cache_resp_valid;
+  wire [3:0]                 l2_cache_resp_source;
+  wire [CACHE_LINE_BITS-1:0] l2_cache_resp_rdata;
+
+  wire target_ready  = is_mmio ? mmio_req_ready : l2_cache_req_ready;
+  wire core_req_busy = core_req_valid_q && !target_ready;
+
+  always @(posedge clk_i or negedge core_rst_n) begin
+    if (!core_rst_n) begin
+      core_req_valid_q   <= 1'b0;
+      core_req_write_q   <= 1'b0;
+      core_req_source_q  <= 4'd0;
+      core_req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
+      core_req_wdata_q   <= {CACHE_LINE_BITS{1'b0}};
+    end else if (!core_req_busy) begin
+      core_req_valid_q   <= l2_req_valid;
+      core_req_write_q   <= l2_req_write;
+      core_req_source_q  <= l2_req_source;
+      core_req_paddr_w_q <= l2_req_paddr_w;
+      core_req_wdata_q   <= l2_req_wdata;
+    end
+  end
+
+  assign l2_req_ready = !core_req_busy;
+
+  wire mmio_req_valid  = core_req_valid_q && is_mmio;
+  wire cache_req_valid = core_req_valid_q && !is_mmio;
 
   reg [3:0] mmio_src_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   always @(posedge clk_i or negedge core_rst_n) begin
     if (!core_rst_n) begin
       mmio_src_q <= 4'd0;
     end else if (mmio_req_valid && mmio_req_ready) begin
-      mmio_src_q <= l2_req_source;
+      mmio_src_q <= core_req_source_q;
     end
   end
 
-  wire                       l2_cache_req_ready;
-  wire                       l2_cache_resp_valid;
-  wire [3:0]                 l2_cache_resp_source;
-  wire [CACHE_LINE_BITS-1:0] l2_cache_resp_rdata;
-
-  assign l2_req_ready    = is_mmio ? mmio_req_ready : l2_cache_req_ready;
   assign l2_resp_valid   = l2_cache_resp_valid | mmio_resp_valid;
   assign l2_resp_source  = mmio_resp_valid ? mmio_src_q : l2_cache_resp_source;
   assign l2_resp_rdata   = mmio_resp_valid ? {8{mmio_resp_rdata}} : l2_cache_resp_rdata;
@@ -164,9 +190,9 @@ module sukuna_top #(
     .rst_ni           (core_rst_n),
     .ext_irq_i        (ext_irq_i),
     .mmio_req_valid_i (mmio_req_valid),
-    .mmio_req_write_i (l2_req_write),
-    .mmio_req_addr_i  ({{(XLEN-PADDR_WIDTH){1'b0}}, l2_req_paddr_w, 2'b00}),
-    .mmio_req_wdata_i (l2_req_wdata[XLEN-1:0]),
+    .mmio_req_write_i (core_req_write_q),
+    .mmio_req_addr_i  ({{(XLEN-PADDR_WIDTH){1'b0}}, core_req_paddr_w_q, 2'b00}),
+    .mmio_req_wdata_i (core_req_wdata_q[XLEN-1:0]),
     .mmio_req_wstrb_i ({(XLEN/8){1'b1}}),
     .mmio_req_ready_o (mmio_req_ready),
     .mmio_resp_valid_o(mmio_resp_valid),
@@ -215,10 +241,10 @@ module sukuna_top #(
     .clk_i           (clk_i),
     .rst_ni          (core_rst_n),
     .req_valid_i     (cache_req_valid),
-    .req_write_i     (l2_req_write),
-    .req_source_i    (l2_req_source),
-    .req_paddr_w_i   (l2_req_paddr_w),
-    .req_wdata_i     (l2_req_wdata),
+    .req_write_i     (core_req_write_q),
+    .req_source_i    (core_req_source_q),
+    .req_paddr_w_i   (core_req_paddr_w_q),
+    .req_wdata_i     (core_req_wdata_q),
     .req_ready_o     (l2_cache_req_ready),
     .resp_valid_o    (l2_cache_resp_valid),
     .resp_source_o   (l2_cache_resp_source),

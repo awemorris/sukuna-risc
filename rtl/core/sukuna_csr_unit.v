@@ -204,10 +204,10 @@ module sukuna_csr_unit #(
   assign sfence_flush_o = sfence_valid_i;
 
   wire [XLEN-1:0] s_trap_pc = (stvec_q[1:0] == 2'b01 && is_interrupt_trap) ?
-                              ({stvec_q[XLEN-1:2], 2'b00} + {{(XLEN-7){1'b0}}, exception_cause_i[4:0], 2'b00}) :
+                              {stvec_q[XLEN-1:7], stvec_q[6:2] + exception_cause_i[4:0], 2'b00} :
                               {stvec_q[XLEN-1:2], 2'b00};
   wire [XLEN-1:0] m_trap_pc = (mtvec_q[1:0] == 2'b01 && is_interrupt_trap) ?
-                              ({mtvec_q[XLEN-1:2], 2'b00} + {{(XLEN-7){1'b0}}, exception_cause_i[4:0], 2'b00}) :
+                              {mtvec_q[XLEN-1:7], mtvec_q[6:2] + exception_cause_i[4:0], 2'b00} :
                               {mtvec_q[XLEN-1:2], 2'b00};
 
   assign trap_target_pc_o = exception_valid_i ? (trap_to_s ? s_trap_pc : m_trap_pc) :
@@ -333,7 +333,7 @@ module sukuna_csr_unit #(
           12'h304: mie_q      <= csr_commit_wdata_i[11:0];
           12'h305: mtvec_q    <= {csr_commit_wdata_i[XLEN-1:2], csr_commit_wdata_i[1:0]};
           12'h340: mscratch_q <= csr_commit_wdata_i;
-          12'h341: mepc_q     <= {csr_commit_wdata_i[XLEN-1:2], 2'b00};
+          12'h341: mepc_q     <= {csr_commit_wdata_i[XLEN-1:1], 1'b0};
           12'h342: mcause_q   <= csr_commit_wdata_i;
           12'h343: mtval_q    <= csr_commit_wdata_i;
           12'h344: ssip_q     <= csr_commit_wdata_i[1]; // S-software interrupt
@@ -349,7 +349,7 @@ module sukuna_csr_unit #(
           12'h104: mie_q      <= (mie_q & ~mideleg_q[11:0]) | (csr_commit_wdata_i[11:0] & mideleg_q[11:0]);
           12'h105: stvec_q    <= {csr_commit_wdata_i[XLEN-1:2], csr_commit_wdata_i[1:0]};
           12'h140: sscratch_q <= csr_commit_wdata_i;
-          12'h141: sepc_q     <= {csr_commit_wdata_i[XLEN-1:2], 2'b00};
+          12'h141: sepc_q     <= {csr_commit_wdata_i[XLEN-1:1], 1'b0};
           12'h142: scause_q   <= csr_commit_wdata_i;
           12'h143: stval_q    <= csr_commit_wdata_i;
           12'h144: ssip_q     <= csr_commit_wdata_i[1];

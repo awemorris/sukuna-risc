@@ -54,32 +54,87 @@ module sukuna_shared_arbiter #(
   input  wire                   simd_busy_i
 );
 
-  // Stub round-robin / priority dispatch logic
-  assign stall_thread_o = {NUM_HARTS{1'b0}};
+  // --------------------------------------------------------------------------
+  // Priority Arbitration: Hart 0 > Hart 1 > Hart 2
+  // --------------------------------------------------------------------------
+  wire [NUM_HARTS-1:0] fp_req   = { (req_valid_i[2] && (req_type_i[5:4] == 2'd0)),
+                                    (req_valid_i[1] && (req_type_i[3:2] == 2'd0)),
+                                    (req_valid_i[0] && (req_type_i[1:0] == 2'd0)) };
+  wire [NUM_HARTS-1:0] fma_req  = { (req_valid_i[2] && (req_type_i[5:4] == 2'd1)),
+                                    (req_valid_i[1] && (req_type_i[3:2] == 2'd1)),
+                                    (req_valid_i[0] && (req_type_i[1:0] == 2'd1)) };
+  wire [NUM_HARTS-1:0] cfp_req  = { (req_valid_i[2] && (req_type_i[5:4] == 2'd2)),
+                                    (req_valid_i[1] && (req_type_i[3:2] == 2'd2)),
+                                    (req_valid_i[0] && (req_type_i[1:0] == 2'd2)) };
+  wire [NUM_HARTS-1:0] simd_req = { (req_valid_i[2] && (req_type_i[5:4] == 2'd3)),
+                                    (req_valid_i[1] && (req_type_i[3:2] == 2'd3)),
+                                    (req_valid_i[0] && (req_type_i[1:0] == 2'd3)) };
 
-  assign fp_valid_o    = 1'b0;
-  assign fp_hart_id_o  = 2'b00;
-  assign fp_rd_o       = 5'd0;
-  assign fp_src1_o     = {XLEN{1'b0}};
-  assign fp_src2_o     = {XLEN{1'b0}};
+  wire [NUM_HARTS-1:0] fp_gnt;
+  assign fp_gnt[0] = fp_req[0] && !fp_busy_i;
+  assign fp_gnt[1] = fp_req[1] && !fp_busy_i && !fp_req[0];
+  assign fp_gnt[2] = fp_req[2] && !fp_busy_i && !fp_req[0] && !fp_req[1];
 
-  assign fma_valid_o   = 1'b0;
-  assign fma_hart_id_o = 2'b00;
-  assign fma_rd_o      = 5'd0;
-  assign fma_src1_o    = {XLEN{1'b0}};
-  assign fma_src2_o    = {XLEN{1'b0}};
-  assign fma_src3_o    = {XLEN{1'b0}};
+  wire [NUM_HARTS-1:0] fma_gnt;
+  assign fma_gnt[0] = fma_req[0] && !fma_busy_i;
+  assign fma_gnt[1] = fma_req[1] && !fma_busy_i && !fma_req[0];
+  assign fma_gnt[2] = fma_req[2] && !fma_busy_i && !fma_req[0] && !fma_req[1];
 
-  assign cfp_valid_o   = 1'b0;
-  assign cfp_hart_id_o = 2'b00;
-  assign cfp_rd_o      = 5'd0;
-  assign cfp_src1_o    = {XLEN{1'b0}};
-  assign cfp_src2_o    = {XLEN{1'b0}};
+  wire [NUM_HARTS-1:0] cfp_gnt;
+  assign cfp_gnt[0] = cfp_req[0] && !cfp_busy_i;
+  assign cfp_gnt[1] = cfp_req[1] && !cfp_busy_i && !cfp_req[0];
+  assign cfp_gnt[2] = cfp_req[2] && !cfp_busy_i && !cfp_req[0] && !cfp_req[1];
 
-  assign simd_valid_o   = 1'b0;
-  assign simd_hart_id_o = 2'b00;
-  assign simd_rd_o      = 5'd0;
-  assign simd_src1_o    = {XLEN{1'b0}};
-  assign simd_src2_o    = {XLEN{1'b0}};
+  wire [NUM_HARTS-1:0] simd_gnt;
+  assign simd_gnt[0] = simd_req[0] && !simd_busy_i;
+  assign simd_gnt[1] = simd_req[1] && !simd_busy_i && !simd_req[0];
+  assign simd_gnt[2] = simd_req[2] && !simd_busy_i && !simd_req[0] && !simd_req[1];
+
+  wire [NUM_HARTS-1:0] any_gnt = fp_gnt | fma_gnt | cfp_gnt | simd_gnt;
+  assign stall_thread_o = req_valid_i & ~any_gnt;
+
+  // Multiplexing
+  wire [1:0] fp_sel   = fp_gnt[0] ? 2'd0 : fp_gnt[1] ? 2'd1 : 2'd2;
+  wire [1:0] fma_sel  = fma_gnt[0] ? 2'd0 : fma_gnt[1] ? 2'd1 : 2'd2;
+  wire [1:0] cfp_sel  = cfp_gnt[0] ? 2'd0 : cfp_gnt[1] ? 2'd1 : 2'd2;
+  wire [1:0] simd_sel = simd_gnt[0] ? 2'd0 : simd_gnt[1] ? 2'd1 : 2'd2;
+
+  assign fp_valid_o   = |fp_gnt;
+  assign fp_hart_id_o = fp_sel;
+  assign fp_rd_o      = (fp_sel == 2'd0) ? req_rd_i[4:0] :
+                        (fp_sel == 2'd1) ? req_rd_i[9:5] : req_rd_i[14:10];
+  assign fp_src1_o    = (fp_sel == 2'd0) ? req_src1_i[XLEN-1:0] :
+                        (fp_sel == 2'd1) ? req_src1_i[2*XLEN-1:XLEN] : req_src1_i[3*XLEN-1:2*XLEN];
+  assign fp_src2_o    = (fp_sel == 2'd0) ? req_src2_i[XLEN-1:0] :
+                        (fp_sel == 2'd1) ? req_src2_i[2*XLEN-1:XLEN] : req_src2_i[3*XLEN-1:2*XLEN];
+
+  assign fma_valid_o   = |fma_gnt;
+  assign fma_hart_id_o = fma_sel;
+  assign fma_rd_o      = (fma_sel == 2'd0) ? req_rd_i[4:0] :
+                         (fma_sel == 2'd1) ? req_rd_i[9:5] : req_rd_i[14:10];
+  assign fma_src1_o    = (fma_sel == 2'd0) ? req_src1_i[XLEN-1:0] :
+                         (fma_sel == 2'd1) ? req_src1_i[2*XLEN-1:XLEN] : req_src1_i[3*XLEN-1:2*XLEN];
+  assign fma_src2_o    = (fma_sel == 2'd0) ? req_src2_i[XLEN-1:0] :
+                         (fma_sel == 2'd1) ? req_src2_i[2*XLEN-1:XLEN] : req_src2_i[3*XLEN-1:2*XLEN];
+  assign fma_src3_o    = (fma_sel == 2'd0) ? req_src3_i[XLEN-1:0] :
+                         (fma_sel == 2'd1) ? req_src3_i[2*XLEN-1:XLEN] : req_src3_i[3*XLEN-1:2*XLEN];
+
+  assign cfp_valid_o   = |cfp_gnt;
+  assign cfp_hart_id_o = cfp_sel;
+  assign cfp_rd_o      = (cfp_sel == 2'd0) ? req_rd_i[4:0] :
+                         (cfp_sel == 2'd1) ? req_rd_i[9:5] : req_rd_i[14:10];
+  assign cfp_src1_o    = (cfp_sel == 2'd0) ? req_src1_i[XLEN-1:0] :
+                         (cfp_sel == 2'd1) ? req_src1_i[2*XLEN-1:XLEN] : req_src1_i[3*XLEN-1:2*XLEN];
+  assign cfp_src2_o    = (cfp_sel == 2'd0) ? req_src2_i[XLEN-1:0] :
+                         (cfp_sel == 2'd1) ? req_src2_i[2*XLEN-1:XLEN] : req_src2_i[3*XLEN-1:2*XLEN];
+
+  assign simd_valid_o   = |simd_gnt;
+  assign simd_hart_id_o = simd_sel;
+  assign simd_rd_o      = (simd_sel == 2'd0) ? req_rd_i[4:0] :
+                          (simd_sel == 2'd1) ? req_rd_i[9:5] : req_rd_i[14:10];
+  assign simd_src1_o    = (simd_sel == 2'd0) ? req_src1_i[XLEN-1:0] :
+                          (simd_sel == 2'd1) ? req_src1_i[2*XLEN-1:XLEN] : req_src1_i[3*XLEN-1:2*XLEN];
+  assign simd_src2_o    = (simd_sel == 2'd0) ? req_src2_i[XLEN-1:0] :
+                          (simd_sel == 2'd1) ? req_src2_i[2*XLEN-1:XLEN] : req_src2_i[3*XLEN-1:2*XLEN];
 
 endmodule

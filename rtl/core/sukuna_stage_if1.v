@@ -38,14 +38,14 @@ module sukuna_stage_if1 #(
 );
 
   wire [31:0] _unused_hart = HART_ID;
-  wire _unused = &{1'b0, clk_i, rst_ni, itlb_fault_i, 1'b0};
+  wire _unused = &{1'b0, clk_i, rst_ni, flush_i, itlb_fault_i, 1'b0};
 
   // Request virtual address to ITLB (word-aligned)
-  assign itlb_req_valid_o = fetch_req_valid_i && !flush_i;
+  assign itlb_req_valid_o = fetch_req_valid_i;
   assign itlb_vaddr_w_o   = fetch_req_pc_i[VADDR_WIDTH-1:2];
 
   // Physical address request to L1I (Word-aligned)
-  assign l1i_req_valid_o  = itlb_hit_i && fetch_req_valid_i && !flush_i;
+  assign l1i_req_valid_o  = itlb_hit_i && fetch_req_valid_i;
   assign l1i_paddr_w_o    = itlb_paddr_w_i;
 
 endmodule

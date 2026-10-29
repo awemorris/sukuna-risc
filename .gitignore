@@ -1,2 +1,6 @@
 build/
 *~
+*.log
+*.jou
+a.out
+.Xil

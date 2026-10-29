@@ -19,7 +19,7 @@ module sukuna_stage_ex #(
   parameter XLEN        = `XLEN,
   parameter VADDR_WIDTH = `VADDR_WIDTH,
   parameter PADDR_WIDTH = `PADDR_WIDTH,
-  parameter MUL_LAT     = 2
+  parameter MUL_LAT     = 3
 )(
   input  wire                   clk_i,
   input  wire                   rst_ni,
@@ -78,6 +78,7 @@ module sukuna_stage_ex #(
   input  wire                   int_en_l1_i,
   input  wire                   ma_en_l0_i,
   input  wire                   ma_en_l1_i,
+  input  wire                   ex_slot1_older_i,
 
   // Floating-Point Register File Inputs
   input  wire [XLEN-1:0]        fpr_src1_i,
@@ -145,44 +146,19 @@ module sukuna_stage_ex #(
   output wire [XLEN-1:0]        ex_wb_l1_data_o,
   output wire                   ex_wb_l1_exc_o,
   output wire [5:0]             ex_wb_l1_cause_o,
-  output wire [XLEN-1:0]        ex_wb_l1_tval_o
+  output wire [XLEN-1:0]        ex_wb_l1_tval_o,
+  output wire                   ex_wb_slot1_older_o
 );
 
   // --------------------------------------------------------------------------
-  // Operand Forwarding / Bypass Network
-  // Prioritizes: EX/WB (1 cycle ahead) -> WB commit (2 cycles ahead) -> Register file data
+  // Zero-Mux Datapath: operands are already bypassed and registered in ID3
   // --------------------------------------------------------------------------
-  wire [XLEN-1:0] fwd_l0_src1 = (ex_wb_l0_valid_o && (ex_wb_l0_rd_o != 5'd0) && (ex_wb_l0_rd_o == l0_rs1_i)) ? ex_wb_l0_data_o :
-                                (ex_wb_l1_valid_o && (ex_wb_l1_rd_o != 5'd0) && (ex_wb_l1_rd_o == l0_rs1_i)) ? ex_wb_l1_data_o :
-                                (wb_l0_wen_i && (wb_l0_rd_i != 5'd0) && (wb_l0_rd_i == l0_rs1_i))             ? wb_l0_data_i   :
-                                (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l0_rs1_i))             ? wb_l1_data_i   :
-                                l0_src1_i;
-
-  wire [XLEN-1:0] fwd_l0_src2 = (ex_wb_l0_valid_o && (ex_wb_l0_rd_o != 5'd0) && (ex_wb_l0_rd_o == l0_rs2_i)) ? ex_wb_l0_data_o :
-                                (ex_wb_l1_valid_o && (ex_wb_l1_rd_o != 5'd0) && (ex_wb_l1_rd_o == l0_rs2_i)) ? ex_wb_l1_data_o :
-                                (wb_l0_wen_i && (wb_l0_rd_i != 5'd0) && (wb_l0_rd_i == l0_rs2_i))             ? wb_l0_data_i   :
-                                (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l0_rs2_i))             ? wb_l1_data_i   :
-                                l0_src2_i;
-
-  wire [XLEN-1:0] fwd_l1_src1 = (ex_wb_l0_valid_o && (ex_wb_l0_rd_o != 5'd0) && (ex_wb_l0_rd_o == l1_rs1_i)) ? ex_wb_l0_data_o :
-                                (ex_wb_l1_valid_o && (ex_wb_l1_rd_o != 5'd0) && (ex_wb_l1_rd_o == l1_rs1_i)) ? ex_wb_l1_data_o :
-                                (wb_l0_wen_i && (wb_l0_rd_i != 5'd0) && (wb_l0_rd_i == l1_rs1_i))             ? wb_l0_data_i   :
-                                (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l1_rs1_i))             ? wb_l1_data_i   :
-                                l1_src1_i;
-
-  wire [XLEN-1:0] fwd_l1_src2 = (ex_wb_l0_valid_o && (ex_wb_l0_rd_o != 5'd0) && (ex_wb_l0_rd_o == l1_rs2_i)) ? ex_wb_l0_data_o :
-                                (ex_wb_l1_valid_o && (ex_wb_l1_rd_o != 5'd0) && (ex_wb_l1_rd_o == l1_rs2_i)) ? ex_wb_l1_data_o :
-                                (wb_l0_wen_i && (wb_l0_rd_i != 5'd0) && (wb_l0_rd_i == l1_rs2_i))             ? wb_l0_data_i   :
-                                (wb_l1_wen_i && (wb_l1_rd_i != 5'd0) && (wb_l1_rd_i == l1_rs2_i))             ? wb_l1_data_i   :
-                                l1_src2_i;
-
-  // Floating-Point Register File Forwarding
-  wire [XLEN-1:0] fwd_fpr_src1 = (ex_wb_l0_writes_fpr_o && (ex_wb_l0_rd_o == l0_rs1_i)) ? ex_wb_l0_data_o :
-                                 (wb_fpr_wen_i && (wb_fpr_rd_i == l0_rs1_i))             ? wb_fpr_data_i   :
-                                 fpr_src1_i;
-  wire [XLEN-1:0] fwd_fpr_src2 = (ex_wb_l0_writes_fpr_o && (ex_wb_l0_rd_o == l0_rs2_i)) ? ex_wb_l0_data_o :
-                                 (wb_fpr_wen_i && (wb_fpr_rd_i == l0_rs2_i))             ? wb_fpr_data_i   :
-                                 fpr_src2_i;
+  wire [XLEN-1:0] fwd_l0_src1  = l0_src1_i;
+  wire [XLEN-1:0] fwd_l0_src2  = l0_src2_i;
+  wire [XLEN-1:0] fwd_l1_src1  = l1_src1_i;
+  wire [XLEN-1:0] fwd_l1_src2  = l1_src2_i;
+  wire [XLEN-1:0] fwd_fpr_src1 = fpr_src1_i;
+  wire [XLEN-1:0] fwd_fpr_src2 = fpr_src2_i;
 
   // Floating-Point Execution Unit
   wire is_fp_op    = l0_valid_i && (l0_alu_op_i == `ALU_FP);
@@ -193,13 +169,18 @@ module sukuna_stage_ex #(
   wire            fp_unit_writes_fpr;
   wire            fp_unit_writes_gpr;
 
+  wire fp_busy;
+
   sukuna_fp_unit #(.XLEN(XLEN)) u_fp_unit (
+    .clk_i      (clk_i),
+    .rst_ni     (rst_ni),
     .funct7_i   (l0_csr_addr_i[11:5]),
     .funct3_i   (l0_mem_op_i[2:0]),
     .rs2_field_i(l0_rs2_i),
     .fpr_src1_i (fwd_fpr_src1),
     .fpr_src2_i (fwd_fpr_src2),
     .gpr_src1_i (fwd_l0_src1),
+    .busy_o     (fp_busy),
     .fp_result_o(fp_unit_res),
     .writes_fpr_o(fp_unit_writes_fpr),
     .writes_gpr_o(fp_unit_writes_gpr)
@@ -255,26 +236,27 @@ module sukuna_stage_ex #(
   // --------------------------------------------------------------------------
   // INT-EU Operand Routing
   // --------------------------------------------------------------------------
-  wire int_valid = (int_en_l0_i && l0_valid_i && !is_csr_op && !is_priv_op) ||
-                   (int_en_l1_i && l1_valid_i && !branch_mispredict_o);
+  wire int_valid = !stall_i && ((int_en_l0_i && l0_valid_i && !is_csr_op && !is_priv_op) ||
+                                (int_en_l1_i && l1_valid_i && !branch_mispredict_o));
 
   // Operand 1 selection
-  wire [XLEN-1:0] int_src1_l0 = (is_jump0)   ? l0_pc_i :
-                                (l0_use_pc_i) ? l0_pc_i : fwd_l0_src1;
+  wire [XLEN-1:0] int_src1_l0 = (is_jump0 || l0_use_pc_i) ? l0_pc_i : fwd_l0_src1;
   wire [XLEN-1:0] int_src1_l1 = fwd_l1_src1;
 
   // Operand 2 selection
   wire [XLEN-1:0] int_src2_l0 = (is_jump0)     ? 64'd4 :
-                                (is_branch0)   ? fwd_l0_src2 :
                                 (l0_use_imm_i) ? l0_imm_i    : fwd_l0_src2;
   wire [XLEN-1:0] int_src2_l1 = l1_use_imm_i ? l1_imm_i    : fwd_l1_src2;
 
   wire [XLEN-1:0] int_src1    = int_en_l0_i ? int_src1_l0 : int_src1_l1;
   wire [XLEN-1:0] int_src2    = int_en_l0_i ? int_src2_l0 : int_src2_l1;
-  wire [4:0]      int_alu_op  = int_en_l0_i ? (is_branch0 ? `ALU_SUB : is_jump0 ? `ALU_ADD : l0_alu_op_i) :
-                                              l1_alu_op_i;
-  wire [4:0]      int_rd      = int_en_l0_i ? (is_branch0 ? 5'd0 : l0_rd_i) : l1_rd_i;
+  wire [4:0]      int_alu_op  = int_en_l0_i ? l0_alu_op_i : l1_alu_op_i;
+  wire [4:0]      int_rd      = int_en_l0_i ? l0_rd_i     : l1_rd_i;
   wire            int_is_word = int_en_l0_i ? (is_jump0 ? 1'b0 : l0_is_word_i) : l1_is_word_i;
+
+  wire l0_is_sub = (l0_alu_op_i == `ALU_SUB) || (l0_alu_op_i == `ALU_SLT) || (l0_alu_op_i == `ALU_SLTU);
+  wire l1_is_sub = (l1_alu_op_i == `ALU_SUB) || (l1_alu_op_i == `ALU_SLT) || (l1_alu_op_i == `ALU_SLTU);
+  wire int_is_sub = int_en_l0_i ? l0_is_sub : l1_is_sub;
 
   wire int_busy;
   wire int_out_valid;
@@ -283,6 +265,7 @@ module sukuna_stage_ex #(
   wire cmp_eq;
   wire cmp_lt;
   wire cmp_ltu;
+  wire ma_busy;
 
   sukuna_int_eu #(
     .XLEN   (XLEN),
@@ -290,8 +273,11 @@ module sukuna_stage_ex #(
   ) u_int_eu (
     .clk_i    (clk_i),
     .rst_ni   (rst_ni),
-    .valid_i  (int_valid && !stall_i && !flush_i),
+    .flush_i  (flush_i),
+    .stall_i  (stall_i),
+    .valid_i  (int_valid),
     .alu_op_i (int_alu_op),
+    .is_sub_i (int_is_sub),
     .is_word_i(int_is_word),
     .src1_i   (int_src1),
     .src2_i   (int_src2),
@@ -305,16 +291,25 @@ module sukuna_stage_ex #(
     .cmp_ltu_o(cmp_ltu)
   );
 
+  // --------------------------------------------------------------------------
+  // Direct Fast Branch Comparator (decoupled from INT-EU ALU sharing & MUXes)
+  // --------------------------------------------------------------------------
+  wire br_sign1 = fwd_l0_src1[XLEN-1];
+  wire br_sign2 = fwd_l0_src2[XLEN-1];
+  wire br_eq    = (fwd_l0_src1 == fwd_l0_src2);
+  wire br_ltu   = (fwd_l0_src1 < fwd_l0_src2);
+  wire br_lt    = (br_sign1 != br_sign2) ? br_sign1 : br_ltu;
+
   // Branch condition evaluation
   reg branch_cond_met;
   always @(*) begin
     case (l0_br_type_i)
-      `BR_BEQ:  branch_cond_met = cmp_eq;
-      `BR_BNE:  branch_cond_met = !cmp_eq;
-      `BR_BLT:  branch_cond_met = cmp_lt;
-      `BR_BGE:  branch_cond_met = !cmp_lt;
-      `BR_BLTU: branch_cond_met = cmp_ltu;
-      `BR_BGEU: branch_cond_met = !cmp_ltu;
+      `BR_BEQ:  branch_cond_met = br_eq;
+      `BR_BNE:  branch_cond_met = !br_eq;
+      `BR_BLT:  branch_cond_met = br_lt;
+      `BR_BGE:  branch_cond_met = !br_lt;
+      `BR_BLTU: branch_cond_met = br_ltu;
+      `BR_BGEU: branch_cond_met = !br_ltu;
       default:  branch_cond_met = 1'b0;
     endcase
   end
@@ -352,7 +347,6 @@ module sukuna_stage_ex #(
   wire [XLEN-1:0] ma_offset = ma_en_l0_i ? l0_imm_i    : l1_imm_i;
   wire [XLEN-1:0] ma_wdata  = ma_en_l0_i ? (is_fp_store ? fwd_fpr_src2 : fwd_l0_src2) : fwd_l1_src2;
 
-  wire ma_busy;
   wire ma_out_valid;
   wire [4:0] ma_out_rd;
   wire [XLEN-1:0] ma_out_rdata;
@@ -394,7 +388,33 @@ module sukuna_stage_ex #(
   );
 
   // Stall backpressure to Hazard Unit (Pattern 1 + Multi-cycle INT)
-  assign ex_stall_o = ma_busy || int_busy;
+  assign ex_stall_o = ma_busy || int_busy || (is_fp_op && fp_busy);
+  wire   ex_freeze  = stall_i || ex_stall_o;
+
+  // Latch MA-EU response to prevent 1-cycle response pulse from dropping during stalls
+  reg [XLEN-1:0] ma_data_q;
+  reg            ma_valid_q;
+  reg [4:0]      ma_rd_q;
+
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      ma_data_q  <= {XLEN{1'b0}};
+      ma_valid_q <= 1'b0;
+      ma_rd_q    <= 5'd0;
+    end else if (flush_i) begin
+      ma_valid_q <= 1'b0;
+    end else if (ma_out_valid) begin
+      ma_data_q  <= ma_out_rdata;
+      ma_valid_q <= 1'b1;
+      ma_rd_q    <= ma_out_rd;
+    end else if (!stall_i) begin
+      ma_valid_q <= 1'b0;
+    end
+  end
+
+  wire            ma_eff_valid = ma_valid_q;
+  wire [XLEN-1:0] ma_eff_data  = ma_data_q;
+  wire [4:0]      ma_eff_rd    = ma_rd_q;
 
   // --------------------------------------------------------------------------
   // Pipeline Registers to WB Stage
@@ -403,6 +423,7 @@ module sukuna_stage_ex #(
   reg              ex_l1_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              int_was_l0_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              ma_was_l0_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              ma_was_l1_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              sys_was_l0_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              sys_valid_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0]        sys_rd_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -427,13 +448,20 @@ module sukuna_stage_ex #(
   reg [XLEN-1:0]   l1_pc_q;         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]   l0_tval_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]   l1_tval_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              slot1_older_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   ex_l0_data_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   ex_l1_data_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg              dtlb_fault_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]   ma_tval_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
+      slot1_older_q   <= 1'b0;
       ex_l0_valid_q   <= 1'b0;
       ex_l1_valid_q   <= 1'b0;
       int_was_l0_q    <= 1'b0;
       ma_was_l0_q     <= 1'b0;
+      ma_was_l1_q     <= 1'b0;
       sys_was_l0_q    <= 1'b0;
       sys_valid_q     <= 1'b0;
       sys_rd_q        <= 5'd0;
@@ -457,12 +485,18 @@ module sukuna_stage_ex #(
       l1_pc_q         <= {XLEN{1'b0}};
       l0_tval_q       <= {XLEN{1'b0}};
       l1_tval_q       <= {XLEN{1'b0}};
+      ex_l0_data_q    <= {XLEN{1'b0}};
+      ex_l1_data_q    <= {XLEN{1'b0}};
+      dtlb_fault_q    <= 1'b0;
+      ma_tval_q       <= {XLEN{1'b0}};
     end else begin
       if (flush_i) begin
+        slot1_older_q   <= 1'b0;
         ex_l0_valid_q   <= 1'b0;
         ex_l1_valid_q   <= 1'b0;
         int_was_l0_q    <= 1'b0;
         ma_was_l0_q     <= 1'b0;
+        ma_was_l1_q     <= 1'b0;
         sys_was_l0_q    <= 1'b0;
         sys_valid_q     <= 1'b0;
         sys_exc_q       <= 1'b0;
@@ -477,11 +511,17 @@ module sukuna_stage_ex #(
         fp_writes_fpr_q <= 1'b0;
         is_fp_flw_q     <= 1'b0;
         fp_res_q        <= {XLEN{1'b0}};
-      end else if (!stall_i) begin
+        ex_l0_data_q    <= {XLEN{1'b0}};
+        ex_l1_data_q    <= {XLEN{1'b0}};
+        dtlb_fault_q    <= 1'b0;
+        ma_tval_q       <= {XLEN{1'b0}};
+      end else if (!ex_freeze) begin
+        slot1_older_q   <= ex_slot1_older_i;
         ex_l0_valid_q   <= l0_valid_i;
         ex_l1_valid_q   <= l1_valid_i && !branch_mispredict_o;
         int_was_l0_q    <= int_en_l0_i && !is_csr_op && !is_priv_op;
         ma_was_l0_q     <= ma_en_l0_i;
+        ma_was_l1_q     <= ma_en_l1_i;
         sys_was_l0_q    <= is_csr_op || is_priv_op;
         sys_valid_q     <= l0_valid_i && (is_csr_op || is_priv_op);
         sys_rd_q        <= l0_rd_i;
@@ -499,12 +539,14 @@ module sukuna_stage_ex #(
         is_fp_load_q    <= is_fp_load;
         is_fp_op_q      <= is_fp_op;
         fp_writes_fpr_q <= fp_unit_writes_fpr;
-        fp_res_q        <= fp_unit_res;
+        if (is_fp_op) fp_res_q <= fp_unit_res;
         is_fp_flw_q     <= is_fp_load && (l0_mem_op_i[2:0] == 3'b010);
         l0_pc_q         <= l0_pc_i;
         l1_pc_q         <= l1_pc_i;
         l0_tval_q       <= l0_pc_i;
         l1_tval_q       <= l1_pc_i;
+        dtlb_fault_q    <= dtlb_fault_i;
+        ma_tval_q       <= ma_base;
       end
     end
   end
@@ -512,20 +554,20 @@ module sukuna_stage_ex #(
   // --------------------------------------------------------------------------
   // Output Routing to WB Stage
   // --------------------------------------------------------------------------
-  assign ex_wb_l0_valid_o     = ex_l0_valid_q && (sys_was_l0_q ? sys_valid_q :
-                                int_was_l0_q ? int_out_valid : ma_out_valid);
+  assign ex_wb_l0_valid_o     = !stall_i && ex_l0_valid_q && (sys_was_l0_q ? sys_valid_q :
+                                int_was_l0_q ? int_out_valid : ma_eff_valid);
   assign ex_wb_l0_pc_o        = l0_pc_q;
   assign ex_wb_l0_rd_o        = sys_was_l0_q ? sys_rd_q :
-                                int_was_l0_q ? int_out_rd : ma_out_rd;
+                                int_was_l0_q ? int_out_rd : ma_eff_rd;
   assign ex_wb_l0_data_o      = sys_was_l0_q ? sys_rdata_q :
                                 is_fp_op_q   ? fp_res_q :
                                 int_was_l0_q ? int_out_result :
-                                is_fp_flw_q  ? {32'hFFFFFFFF, ma_out_rdata[31:0]} :
-                                ma_out_rdata;
+                                is_fp_flw_q  ? {32'hFFFFFFFF, ma_eff_data[31:0]} :
+                                ma_eff_data;
   assign ex_wb_l0_exc_o       = sys_was_l0_q ? sys_exc_q :
-                                (!int_was_l0_q && dtlb_fault_i);
+                                (!int_was_l0_q && dtlb_fault_q);
   assign ex_wb_l0_cause_o     = sys_was_l0_q ? sys_cause_q : `EXC_LOAD_PAGE_FAULT;
-  assign ex_wb_l0_tval_o      = sys_was_l0_q ? l0_tval_q : ma_base;
+  assign ex_wb_l0_tval_o      = sys_was_l0_q ? l0_tval_q : ma_tval_q;
 
   assign ex_wb_l0_csr_wen_o   = sys_was_l0_q && sys_csr_wen_q;
   assign ex_wb_l0_csr_addr_o  = sys_csr_addr_q;
@@ -537,13 +579,14 @@ module sukuna_stage_ex #(
   assign ex_wb_l0_fence_i_o   = sys_was_l0_q && sys_fence_i_q;
   assign ex_wb_l0_writes_fpr_o= is_fp_load_q || (is_fp_op_q && fp_writes_fpr_q);
 
-  assign ex_wb_l1_valid_o     = ex_l1_valid_q && ((!int_was_l0_q) ? int_out_valid : ma_out_valid);
+  assign ex_wb_l1_valid_o     = !stall_i && ex_l1_valid_q && (ma_was_l1_q ? ma_eff_valid : int_out_valid);
   assign ex_wb_l1_pc_o        = l1_pc_q;
-  assign ex_wb_l1_rd_o        = (!int_was_l0_q) ? int_out_rd : ma_out_rd;
-  assign ex_wb_l1_data_o      = (!int_was_l0_q) ? int_out_result : ma_out_rdata;
-  assign ex_wb_l1_exc_o       = (int_was_l0_q && dtlb_fault_i);
+  assign ex_wb_l1_rd_o        = ma_was_l1_q ? ma_eff_rd : int_out_rd;
+  assign ex_wb_l1_data_o      = ma_was_l1_q ? ma_eff_data : int_out_result;
+  assign ex_wb_l1_exc_o       = (int_was_l0_q && dtlb_fault_q);
   assign ex_wb_l1_cause_o     = `EXC_LOAD_PAGE_FAULT;
   assign ex_wb_l1_tval_o      = l1_tval_q;
+  assign ex_wb_slot1_older_o  = slot1_older_q;
 
   // Avoid unused variable warnings
   wire _unused = ma_was_l0_q;

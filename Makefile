@@ -42,7 +42,13 @@ YOSYS          ?= yosys
 NEXTPNR_XILINX ?= nextpnr-xilinx
 FASM2FRAMES    ?= fasm2frames
 XC7FRAMES2BIT  ?= xc7frames2bit
-VIVADO         ?= vivado
+
+# Vivado Configuration (Auto-detect ~/opt/amd or ~/opt/Xilinx)
+VIVADO_DIR        ?= $(firstword $(wildcard /home/awe/opt/amd/*/Vivado /home/awe/opt/Xilinx/Vivado/* /opt/Xilinx/Vivado/*))
+VIVADO_SETTINGS   ?= $(VIVADO_DIR)/settings64.sh
+VIVADO_UBUNTU_LIB ?= $(firstword $(wildcard $(VIVADO_DIR)/lib/lnx64.o/Ubuntu/24 $(VIVADO_DIR)/lib/lnx64.o/Ubuntu/22))
+VIVADO_CMD        ?= $(if $(VIVADO_SETTINGS),source $(VIVADO_SETTINGS) && LD_LIBRARY_PATH=$(VIVADO_UBUNTU_LIB):$$LD_LIBRARY_PATH vivado,vivado)
+VIVADO            ?= $(VIVADO_CMD)
 
 # OpenXC7 / Project X-Ray Configuration
 XRAY_DIR       ?= /opt/openxc7/prjxray
@@ -158,7 +164,7 @@ $(BUILD_DIR)/sukuna_kc705.bit: $(BUILD_DIR)/sukuna_kc705.fasm
 
 vivado-kc705:
 	@echo "==> Running Vivado batch synthesis for KC705..."
-	cd $(BSP_DIR)/kc705 && $(VIVADO) -mode batch -source kc705_synth.tcl
+	$(MAKE) -C $(BSP_DIR)/kc705 synth
 
 vivado-zcu104:
 	@echo "==> Running Vivado batch synthesis for ZCU104..."
@@ -170,5 +176,5 @@ vivado-zcu104:
 .PHONY: clean
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -rf $(BSP_DIR)/kc705/build_kc705 $(BSP_DIR)/kc705/*.log $(BSP_DIR)/kc705/*.jou $(BSP_DIR)/kc705/*.dcp $(BSP_DIR)/kc705/*.rpt
-	rm -rf $(BSP_DIR)/zcu104/build_zcu104 $(BSP_DIR)/zcu104/*.log $(BSP_DIR)/zcu104/*.jou $(BSP_DIR)/zcu104/*.dcp $(BSP_DIR)/zcu104/*.rpt
+	rm -rf $(BSP_DIR)/kc705/build_kc705 $(BSP_DIR)/kc705/*.log $(BSP_DIR)/kc705/*.jou $(BSP_DIR)/kc705/*.dcp $(BSP_DIR)/kc705/*.rpt $(BSP_DIR)/kc705/.Xil
+	rm -rf $(BSP_DIR)/zcu104/build_zcu104 $(BSP_DIR)/zcu104/*.log $(BSP_DIR)/zcu104/*.jou $(BSP_DIR)/zcu104/*.dcp $(BSP_DIR)/zcu104/*.rpt $(BSP_DIR)/zcu104/.Xil

@@ -55,6 +55,7 @@ module sukuna_stage_id3 #(
   input  wire             id2_int_en_l1_i,
   input  wire             id2_ma_en_l0_i,
   input  wire             id2_ma_en_l1_i,
+  input  wire             id2_slot1_older_i,
 
   // RegFile Read Data Outputs
   input  wire [XLEN-1:0]  rf_rdata_l0_rs1_i,
@@ -76,10 +77,16 @@ module sukuna_stage_id3 #(
   input  wire             fwd_ex_val_i,
   input  wire [4:0]       fwd_ex_rd_i,
   input  wire [XLEN-1:0]  fwd_ex_data_i,
+  input  wire             fwd_ex_l1_val_i,
+  input  wire [4:0]       fwd_ex_l1_rd_i,
+  input  wire [XLEN-1:0]  fwd_ex_l1_data_i,
 
   input  wire             fwd_wb_l0_val_i,
   input  wire [4:0]       fwd_wb_l0_rd_i,
   input  wire [XLEN-1:0]  fwd_wb_l0_data_i,
+  input  wire             fwd_wb_l1_val_i,
+  input  wire [4:0]       fwd_wb_l1_rd_i,
+  input  wire [XLEN-1:0]  fwd_wb_l1_data_i,
 
   // --------------------------------------------------------------------------
   // Direct Outputs to EX Stage (Lane 0: older, Lane 1: younger)
@@ -125,25 +132,34 @@ module sukuna_stage_id3 #(
   output reg  [4:0]       ex_l0_rs1_o,        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [4:0]       ex_l0_rs2_o,        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [4:0]       ex_l1_rs1_o,        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg  [4:0]       ex_l1_rs2_o         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg  [4:0]       ex_l1_rs2_o,        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg              ex_slot1_older_o    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 );
 
   // Bypass selection for Lane 0
-  wire [XLEN-1:0] l0_src1_mux = (fwd_ex_val_i && (fwd_ex_rd_i != 5'd0) && (fwd_ex_rd_i == id2_rs1_0_i)) ? fwd_ex_data_i :
+  wire [XLEN-1:0] l0_src1_mux = (fwd_ex_val_i && (fwd_ex_rd_i != 5'd0) && (fwd_ex_rd_i == id2_rs1_0_i))       ? fwd_ex_data_i :
+                                (fwd_ex_l1_val_i && (fwd_ex_l1_rd_i != 5'd0) && (fwd_ex_l1_rd_i == id2_rs1_0_i)) ? fwd_ex_l1_data_i :
                                 (fwd_wb_l0_val_i && (fwd_wb_l0_rd_i != 5'd0) && (fwd_wb_l0_rd_i == id2_rs1_0_i)) ? fwd_wb_l0_data_i :
+                                (fwd_wb_l1_val_i && (fwd_wb_l1_rd_i != 5'd0) && (fwd_wb_l1_rd_i == id2_rs1_0_i)) ? fwd_wb_l1_data_i :
                                 rf_rdata_l0_rs1_i;
 
-  wire [XLEN-1:0] l0_src2_mux = (fwd_ex_val_i && (fwd_ex_rd_i != 5'd0) && (fwd_ex_rd_i == id2_rs2_0_i)) ? fwd_ex_data_i :
+  wire [XLEN-1:0] l0_src2_mux = (fwd_ex_val_i && (fwd_ex_rd_i != 5'd0) && (fwd_ex_rd_i == id2_rs2_0_i))       ? fwd_ex_data_i :
+                                (fwd_ex_l1_val_i && (fwd_ex_l1_rd_i != 5'd0) && (fwd_ex_l1_rd_i == id2_rs2_0_i)) ? fwd_ex_l1_data_i :
                                 (fwd_wb_l0_val_i && (fwd_wb_l0_rd_i != 5'd0) && (fwd_wb_l0_rd_i == id2_rs2_0_i)) ? fwd_wb_l0_data_i :
+                                (fwd_wb_l1_val_i && (fwd_wb_l1_rd_i != 5'd0) && (fwd_wb_l1_rd_i == id2_rs2_0_i)) ? fwd_wb_l1_data_i :
                                 rf_rdata_l0_rs2_i;
 
   // Bypass selection for Lane 1
-  wire [XLEN-1:0] l1_src1_mux = (fwd_ex_val_i && (fwd_ex_rd_i != 5'd0) && (fwd_ex_rd_i == id2_rs1_1_i)) ? fwd_ex_data_i :
+  wire [XLEN-1:0] l1_src1_mux = (fwd_ex_val_i && (fwd_ex_rd_i != 5'd0) && (fwd_ex_rd_i == id2_rs1_1_i))       ? fwd_ex_data_i :
+                                (fwd_ex_l1_val_i && (fwd_ex_l1_rd_i != 5'd0) && (fwd_ex_l1_rd_i == id2_rs1_1_i)) ? fwd_ex_l1_data_i :
                                 (fwd_wb_l0_val_i && (fwd_wb_l0_rd_i != 5'd0) && (fwd_wb_l0_rd_i == id2_rs1_1_i)) ? fwd_wb_l0_data_i :
+                                (fwd_wb_l1_val_i && (fwd_wb_l1_rd_i != 5'd0) && (fwd_wb_l1_rd_i == id2_rs1_1_i)) ? fwd_wb_l1_data_i :
                                 rf_rdata_l1_rs1_i;
 
-  wire [XLEN-1:0] l1_src2_mux = (fwd_ex_val_i && (fwd_ex_rd_i != 5'd0) && (fwd_ex_rd_i == id2_rs2_1_i)) ? fwd_ex_data_i :
+  wire [XLEN-1:0] l1_src2_mux = (fwd_ex_val_i && (fwd_ex_rd_i != 5'd0) && (fwd_ex_rd_i == id2_rs2_1_i))       ? fwd_ex_data_i :
+                                (fwd_ex_l1_val_i && (fwd_ex_l1_rd_i != 5'd0) && (fwd_ex_l1_rd_i == id2_rs2_1_i)) ? fwd_ex_l1_data_i :
                                 (fwd_wb_l0_val_i && (fwd_wb_l0_rd_i != 5'd0) && (fwd_wb_l0_rd_i == id2_rs2_1_i)) ? fwd_wb_l0_data_i :
+                                (fwd_wb_l1_val_i && (fwd_wb_l1_rd_i != 5'd0) && (fwd_wb_l1_rd_i == id2_rs2_1_i)) ? fwd_wb_l1_data_i :
                                 rf_rdata_l1_rs2_i;
 
   // Bypass selection for FPR
@@ -196,6 +212,7 @@ module sukuna_stage_id3 #(
       ex_l0_rs2_o        <= 5'd0;
       ex_l1_rs1_o        <= 5'd0;
       ex_l1_rs2_o        <= 5'd0;
+      ex_slot1_older_o   <= 1'b0;
     end else begin
       if (flush_i) begin
         ex_l0_valid_o  <= 1'b0;
@@ -208,9 +225,11 @@ module sukuna_stage_id3 #(
         ex_l0_rs2_o    <= 5'd0;
         ex_l1_rs1_o    <= 5'd0;
         ex_l1_rs2_o    <= 5'd0;
+        ex_slot1_older_o <= 1'b0;
         ex_l0_fpr_src1_o <= {XLEN{1'b0}};
         ex_l0_fpr_src2_o <= {XLEN{1'b0}};
       end else if (!stall_i) begin
+        ex_slot1_older_o   <= id2_slot1_older_i;
         // Straight assignment of Lane 0
         ex_l0_valid_o      <= id2_valid0_i;
         ex_l0_pc_o         <= id2_pc0_i;

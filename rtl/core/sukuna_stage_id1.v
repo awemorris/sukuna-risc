@@ -20,6 +20,8 @@ module sukuna_stage_id1 #(
   // Pipeline flow controls
   input  wire             stall_i,
   input  wire             flush_i,
+  input  wire             hold_slot0_i,
+  input  wire             hold_slot1_i,
 
   // Input from IF2
   input  wire             if2_valid0_i,
@@ -72,7 +74,8 @@ module sukuna_stage_id1 #(
   output reg  [4:0]       id1_alu_op1_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [7:0]       id1_mem_op1_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              id1_is_word1_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg              id1_use_imm1_o    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg              id1_use_imm1_o,   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  output reg              id1_slot1_older_o /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 );
 
   // Directly connect instruction fields to RegFile ports (0 MUX)
@@ -251,6 +254,14 @@ module sukuna_stage_id1 #(
   wire is_auipc1  = (op1 == 7'b0010111);
   wire is_fp1     = (op1 == 7'b1010011);
   wire is_fence1  = (op1 == 7'b0001111);
+  wire is_branch1 = (op1 == 7'b1100011);
+  wire is_jal1    = (op1 == 7'b1101111);
+  wire is_jalr1   = (op1 == 7'b1100111);
+  wire is_sys1    = (op1 == 7'b1110011);
+
+  wire [1:0] type1_comb = (is_load1 || is_store1) ? 2'b10 :
+                          (is_sys1 || is_branch1 || is_jal1 || is_jalr1 || is_fence1) ? 2'b00 :
+                          is_fp1 ? 2'b11 : 2'b01;
 
   wire l1_writes_rd = is_op1 || is_op_imm1 || is_op32_1 || is_opi32_1 ||
                       is_load1 || is_lui1 || is_auipc1;
@@ -347,47 +358,60 @@ module sukuna_stage_id1 #(
       id1_mem_op1_o     <= 8'd0;
       id1_is_word1_o    <= 1'b0;
       id1_use_imm1_o    <= 1'b0;
+      id1_slot1_older_o <= 1'b0;
     end else begin
       if (flush_i) begin
-        id1_valid0_o <= 1'b0;
-        id1_valid1_o <= 1'b0;
+        id1_valid0_o      <= 1'b0;
+        id1_valid1_o      <= 1'b0;
+        id1_slot1_older_o <= 1'b0;
       end else if (!stall_i) begin
-        // Lane 0 Output Latching
-        id1_valid0_o      <= if2_valid0_i;
-        id1_pc0_o         <= if2_pc0_i;
-        id1_inst0_o       <= if2_inst0_i;
-        id1_type0_o       <= (is_load0 || is_store0 || is_amo0) ? 2'b10 :
-                             (is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || (is_fence0 && funct3_0 == 3'b001)) ? 2'b00 :
-                             2'b01;
-        id1_rd0_o         <= l0_writes_rd ? if2_inst0_i[11:7] : 5'd0;
-        id1_rs1_0_o       <= (is_lui0 || is_auipc0 || is_jal0) ? 5'd0 : if2_inst0_i[19:15];
-        id1_rs2_0_o       <= (is_lui0 || is_auipc0 || is_jal0 || is_jalr0 || is_load0 || is_op_imm0 || is_opi32_0 || (is_amo0 && funct7_0[6:2] == 5'b00010)) ? 5'd0 : if2_inst0_i[24:20];
-        id1_imm0_o        <= imm_l0;
-        id1_alu_op0_o     <= alu_op0_comb;
-        id1_mem_op0_o     <= {amo_type0, (is_store0 || is_amo_write0), funct3_0};
-        id1_sys_op0_o     <= sys_op0;
-        id1_priv_op0_o    <= priv_op0;
-        id1_csr_addr0_o   <= funct12_0;
-        id1_csr_is_imm0_o <= is_sys0 && funct3_0[2];
-        id1_br_type0_o    <= br_type0;
-        id1_jump_type0_o  <= jump_type0;
-        id1_is_word0_o    <= is_op32_0 || is_opi32_0;
-        id1_use_imm0_o    <= is_op_imm0 || is_opi32_0 || is_lui0 || is_auipc0 || is_load0 || is_store0 || is_amo0 || is_jal0 || is_jalr0;
-        id1_use_pc0_o     <= is_auipc0 || is_jal0;
+        // Slot 0 Output Latching (when not held)
+        if (!hold_slot0_i) begin
+          id1_valid0_o      <= if2_valid0_i;
+          id1_pc0_o         <= if2_pc0_i;
+          id1_inst0_o       <= if2_inst0_i;
+          id1_type0_o       <= (is_load0 || is_store0 || is_amo0) ? 2'b10 :
+                               (is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || (is_fence0 && funct3_0 == 3'b001)) ? 2'b00 :
+                               2'b01;
+          id1_rd0_o         <= l0_writes_rd ? if2_inst0_i[11:7] : 5'd0;
+          id1_rs1_0_o       <= (is_lui0 || is_auipc0 || is_jal0) ? 5'd0 : if2_inst0_i[19:15];
+          id1_rs2_0_o       <= (is_lui0 || is_auipc0 || is_jal0 || is_jalr0 || is_load0 || is_op_imm0 || is_opi32_0 || (is_amo0 && funct7_0[6:2] == 5'b00010)) ? 5'd0 : if2_inst0_i[24:20];
+          id1_imm0_o        <= imm_l0;
+          id1_alu_op0_o     <= alu_op0_comb;
+          id1_mem_op0_o     <= {amo_type0, (is_store0 || is_amo_write0), funct3_0};
+          id1_sys_op0_o     <= sys_op0;
+          id1_priv_op0_o    <= priv_op0;
+          id1_csr_addr0_o   <= funct12_0;
+          id1_csr_is_imm0_o <= is_sys0 && funct3_0[2];
+          id1_br_type0_o    <= br_type0;
+          id1_jump_type0_o  <= jump_type0;
+          id1_is_word0_o    <= is_op32_0 || is_opi32_0;
+          id1_use_imm0_o    <= is_op_imm0 || is_opi32_0 || is_lui0 || is_auipc0 || is_load0 || is_store0 || is_amo0 || is_jal0 || is_jalr0;
+          id1_use_pc0_o     <= is_auipc0 || is_jal0;
+        end
 
-        // Lane 1 Output Latching
-        id1_valid1_o      <= if2_valid1_i;
-        id1_pc1_o         <= if2_pc1_i;
-        id1_inst1_o       <= if2_inst1_i;
-        id1_type1_o       <= (is_load1 || is_store1) ? 2'b10 : is_fp1 ? 2'b11 : 2'b01;
-        id1_rd1_o         <= l1_writes_rd ? if2_inst1_i[11:7] : 5'd0;
-        id1_rs1_1_o       <= (is_lui1 || is_auipc1) ? 5'd0 : if2_inst1_i[19:15];
-        id1_rs2_1_o       <= (is_lui1 || is_auipc1 || is_load1 || is_op_imm1 || is_opi32_1) ? 5'd0 : if2_inst1_i[24:20];
-        id1_imm1_o        <= imm_l1;
-        id1_alu_op1_o     <= alu_op1_comb;
-        id1_mem_op1_o     <= {4'd0, is_store1, funct3_1};
-        id1_is_word1_o    <= is_op32_1 || is_opi32_1;
-        id1_use_imm1_o    <= is_op_imm1 || is_opi32_1 || is_lui1 || is_auipc1 || is_load1 || is_store1;
+        // Slot 1 Output Latching (when not held)
+        if (!hold_slot1_i) begin
+          id1_valid1_o      <= if2_valid1_i;
+          id1_pc1_o         <= if2_pc1_i;
+          id1_inst1_o       <= if2_inst1_i;
+          id1_type1_o       <= type1_comb;
+          id1_rd1_o         <= l1_writes_rd ? if2_inst1_i[11:7] : 5'd0;
+          id1_rs1_1_o       <= (is_lui1 || is_auipc1) ? 5'd0 : if2_inst1_i[19:15];
+          id1_rs2_1_o       <= (is_lui1 || is_auipc1 || is_load1 || is_op_imm1 || is_opi32_1) ? 5'd0 : if2_inst1_i[24:20];
+          id1_imm1_o        <= imm_l1;
+          id1_alu_op1_o     <= alu_op1_comb;
+          id1_mem_op1_o     <= {4'd0, is_store1, funct3_1};
+          id1_is_word1_o    <= is_op32_1 || is_opi32_1;
+          id1_use_imm1_o    <= is_op_imm1 || is_opi32_1 || is_lui1 || is_auipc1 || is_load1 || is_store1;
+        end
+
+        // slot1_is_older tracking
+        if (hold_slot1_i) begin
+          id1_slot1_older_o <= 1'b1;
+        end else if (!hold_slot0_i) begin
+          id1_slot1_older_o <= 1'b0;
+        end
       end
     end
   end

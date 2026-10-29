@@ -16,13 +16,16 @@
 
 module sukuna_int_eu #(
   parameter XLEN    = `XLEN,
-  parameter MUL_LAT = 2
+  parameter MUL_LAT = 3
 )(
   input  wire            clk_i,
   input  wire            rst_ni,
+  input  wire            flush_i,
+  input  wire            stall_i,
 
   input  wire            valid_i,
   input  wire [4:0]      alu_op_i,
+  input  wire            is_sub_i,
   input  wire            is_word_i,
   input  wire [XLEN-1:0] src1_i,
   input  wire [XLEN-1:0] src2_i,
@@ -45,9 +48,7 @@ module sukuna_int_eu #(
   // --------------------------------------------------------------------------
   // 1. Unified Shared Adder/Subtractor (ADD, SUB, SLT, SLTU, Branch Compares)
   // --------------------------------------------------------------------------
-  wire is_sub = (alu_op_i == `ALU_SUB) ||
-                (alu_op_i == `ALU_SLT) ||
-                (alu_op_i == `ALU_SLTU);
+  wire is_sub = is_sub_i;
 
   wire [XLEN-1:0] addsub_res;
   wire            addsub_cb;
@@ -66,15 +67,13 @@ module sukuna_int_eu #(
     .carry_borrow_o(addsub_cb)
   );
 
-  // Signed & unsigned comparison evaluation using addsub result
+  // Signed & unsigned comparison evaluation
   wire sign1 = src1_i[XLEN-1];
   wire sign2 = src2_i[XLEN-1];
-  wire sign_diff = addsub_res[XLEN-1];
-  wire overflow = (sign1 != sign2) && (sign_diff != sign1);
-  wire slt_val  = sign_diff ^ overflow;
   wire sltu_val = ~addsub_cb; // No carry = borrow in subtraction
+  wire slt_val  = (sign1 != sign2) ? sign1 : sltu_val;
 
-  assign cmp_eq_o  = (addsub_res == {XLEN{1'b0}});
+  assign cmp_eq_o  = (src1_i == src2_i);
   assign cmp_lt_o  = slt_val;
   assign cmp_ltu_o = sltu_val;
 
@@ -128,7 +127,7 @@ module sukuna_int_eu #(
     .IMPL  ("DSP")
   ) u_shared_mul (
     .clk(clk_i),
-    .en (1'b1),
+    .en (!stall_i),
     .a  (mul_a),
     .b  (mul_b),
     .p  (mul_full_prod)
@@ -148,7 +147,10 @@ module sukuna_int_eu #(
       mul_busy_q     <= 1'b0;
       mul_word_q     <= 1'b0;
       mul_high_q     <= 1'b0;
-    end else begin
+    end else if (flush_i) begin
+      mul_pipe_vld_q <= {(MUL_LAT+1){1'b0}};
+      mul_busy_q     <= 1'b0;
+    end else if (!stall_i) begin
       mul_pipe_vld_q <= {mul_pipe_vld_q[MUL_LAT-1:0], (valid_i && is_mul_any)};
       if (valid_i && is_mul_any) begin
         mul_word_q <= is_word_i;
@@ -189,6 +191,7 @@ module sukuna_int_eu #(
   ) u_shared_div (
     .clk_i        (clk_i),
     .rst_ni       (rst_ni),
+    .flush_i      (flush_i),
     .start_i      (div_start),
     .signed_mode_i(is_div_signed),
     .dividend_i   (div_src1),
@@ -206,6 +209,8 @@ module sukuna_int_eu #(
       div_is_rem_q <= 1'b0;
       div_word_q   <= 1'b0;
       div_rd_q     <= 5'd0;
+    end else if (flush_i) begin
+      div_busy_q   <= 1'b0;
     end else begin
       if (div_start) begin
         div_busy_q   <= 1'b1;
@@ -256,20 +261,24 @@ module sukuna_int_eu #(
       valid_o  <= 1'b0;
       rd_o     <= 5'd0;
       result_o <= {XLEN{1'b0}};
-    end else if (div_done) begin
-      valid_o  <= 1'b1;
-      rd_o     <= div_rd_q;
-      result_o <= div_final_res;
-    end else if (MUL_LAT > 0 && mul_pipe_vld_q[MUL_LAT-1]) begin
-      valid_o  <= 1'b1;
-      rd_o     <= (MUL_LAT > 1) ? mul_rd_q : rd_i;
-      result_o <= mul_final_res;
-    end else if (valid_i && !is_mul_any && !is_div_op) begin
-      valid_o  <= 1'b1;
-      rd_o     <= rd_i;
-      result_o <= final_alu_res;
-    end else if (!busy_o) begin
-      valid_o <= 1'b0;
+    end else if (flush_i) begin
+      valid_o  <= 1'b0;
+    end else if (!stall_i) begin
+      if (div_done) begin
+        valid_o  <= 1'b1;
+        rd_o     <= div_rd_q;
+        result_o <= div_final_res;
+      end else if (MUL_LAT > 0 && mul_pipe_vld_q[MUL_LAT-1]) begin
+        valid_o  <= 1'b1;
+        rd_o     <= (MUL_LAT > 1) ? mul_rd_q : rd_i;
+        result_o <= mul_final_res;
+      end else if (valid_i && !is_mul_any && !is_div_op) begin
+        valid_o  <= 1'b1;
+        rd_o     <= rd_i;
+        result_o <= final_alu_res;
+      end else if (!busy_o) begin
+        valid_o <= 1'b0;
+      end
     end
   end
 

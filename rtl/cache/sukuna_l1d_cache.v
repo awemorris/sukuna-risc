@@ -84,6 +84,7 @@ module sukuna_l1d_cache #(
   localparam S_IDLE   = 2'd0;
   localparam S_EVICT  = 2'd1;
   localparam S_REFILL = 2'd2;
+  localparam S_MMIO   = 2'd3;
 
   localparam WAY_BITS = (WAYS <= 2)  ? 1 :
                         (WAYS <= 4)  ? 2 :
@@ -116,10 +117,13 @@ module sukuna_l1d_cache #(
       req_tag_q     <= req_tag;
       req_paddr_w_q <= mem_paddr_w_i;
       req_wdata_q   <= mem_wdata_i;
-    end else if (state_q == S_REFILL && l2_resp_valid_i) begin
+    end else if ((state_q == S_REFILL || state_q == S_MMIO) && l2_resp_valid_i) begin
       req_valid_q   <= 1'b0;
     end
   end
+
+  // MMIO address detection: physical address < 256MB is MMIO (PLIC & CLINT)
+  wire is_mmio = (req_paddr_w_q[PADDR_WIDTH-1:28] == {(PADDR_WIDTH-28){1'b0}});
 
   // --------------------------------------------------------------------------
   // Tag and Data Arrays for WAYS
@@ -150,7 +154,7 @@ module sukuna_l1d_cache #(
   generate
     for (w = 0; w < WAYS; w = w + 1) begin : gen_dway
       wire way_refill_wen = (state_q == S_REFILL) && l2_resp_valid_i && (victim_ptr_q == w[WAY_BITS-1:0]);
-      wire way_write_hit  = (state_q == S_IDLE) && req_valid_q && req_write_q && way_hit[w];
+      wire way_write_hit  = (state_q == S_IDLE) && req_valid_q && req_write_q && way_hit[w] && !is_mmio;
       wire way_snoop_inv  = snoop_req_valid_i && snoop_invalidate_i && snoop_way_hit[w];
 
       // Tag Array ({dirty, valid, tag})
@@ -204,33 +208,31 @@ module sukuna_l1d_cache #(
   // --------------------------------------------------------------------------
   // Hit Selection and Response
   // --------------------------------------------------------------------------
-  wire hit = |way_hit;
+  wire hit = (|way_hit) && !is_mmio;
   assign snoop_hit_o = |snoop_way_hit;
 
-  reg [CACHE_LINE_BITS-1:0] hit_line_data;
-  integer k;
-  always @(*) begin
-    hit_line_data = data_rdata[0];
-    for (k = 0; k < WAYS; k = k + 1) begin
-      if (way_hit[k]) hit_line_data = data_rdata[k];
-    end
-  end
-
-  wire refill_done = (state_q == S_REFILL) && l2_resp_valid_i;
-  wire [CACHE_LINE_BITS-1:0] eff_line_data = refill_done ? refill_wdata : hit_line_data;
-
-  wire [XLEN-1:0] line_dword [0:7];
-  genvar di;
+  wire [XLEN-1:0] way_dword [0:WAYS-1];
+  genvar wi;
   generate
-    for (di = 0; di < 8; di = di + 1) begin : gen_dwords
-      assign line_dword[di] = eff_line_data[di*64 +: 64];
+    for (wi = 0; wi < WAYS; wi = wi + 1) begin : gen_way_dword
+      assign way_dword[wi] = data_rdata[wi][req_offset_q[3:1]*64 +: 64];
     end
   endgenerate
 
+  wire [XLEN-1:0] hit_dword = ({XLEN{way_hit[0]}} & way_dword[0]) |
+                              ({XLEN{way_hit[1]}} & way_dword[1]) |
+                              ({XLEN{way_hit[2]}} & way_dword[2]) |
+                              ({XLEN{way_hit[3]}} & way_dword[3]);
+
+  wire mmio_done   = (state_q == S_MMIO) && l2_resp_valid_i;
+  wire refill_done = (state_q == S_REFILL) && l2_resp_valid_i;
+  wire [XLEN-1:0] refill_dword = refill_wdata[req_offset_q[3:1]*64 +: 64];
+  wire [XLEN-1:0] eff_dword    = refill_done ? refill_dword : hit_dword;
+
   assign mem_req_ready_o  = !is_busy;
-  assign mem_resp_valid_o = (hit && !is_busy) || refill_done;
-  assign mem_rdata_o      = line_dword[req_offset_q[3:1]];
-  assign mem_miss_stall_o = ((req_valid_q && !hit) || is_busy) && !refill_done;
+  assign mem_resp_valid_o = (hit && !is_busy) || refill_done || mmio_done;
+  assign mem_rdata_o      = mmio_done ? l2_rline_data_i[XLEN-1:0] : eff_dword;
+  assign mem_miss_stall_o = ((req_valid_q && !hit) || is_busy) && !refill_done && !mmio_done;
 
   // --------------------------------------------------------------------------
   // Eviction & Refill State Machine
@@ -265,7 +267,13 @@ module sukuna_l1d_cache #(
 
       case (state_q)
         S_IDLE: begin
-          if (req_valid_q && !hit) begin
+          if (req_valid_q && is_mmio) begin
+            l2_req_valid_o    <= 1'b1;
+            l2_req_write_o    <= req_write_q;
+            l2_line_paddr_w_o <= req_paddr_w_q;
+            l2_wline_data_o   <= {8{req_wdata_q}};
+            state_q           <= S_MMIO;
+          end else if (req_valid_q && !hit) begin
             if (victim_dirty) begin
               // Evict dirty line to L2
               l2_req_valid_o    <= 1'b1;
@@ -280,6 +288,15 @@ module sukuna_l1d_cache #(
               l2_line_paddr_w_o <= {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000};
               state_q           <= S_REFILL;
             end
+          end
+        end
+
+        S_MMIO: begin
+          l2_req_valid_o <= 1'b1;
+          l2_req_write_o <= req_write_q;
+          if (l2_resp_valid_i) begin
+            l2_req_valid_o <= 1'b0;
+            state_q        <= S_IDLE;
           end
         end
 

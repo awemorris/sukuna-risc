@@ -1,33 +1,67 @@
 # ============================================================================
-# Vivado Synthesis & Implementation Script for KC705
+# Vivado Batch Synthesis Script for KC705 (Kintex-7 xc7k325tffg900-2)
 # ============================================================================
 
-set project_name "sukuna_kc705"
+set_param general.maxThreads 2
 set part "xc7k325tffg900-2"
+set top  "sukuna_kc705_top"
+set out_dir "./build_kc705"
 
-create_project -force $project_name ./build_kc705 -part $part
+file mkdir $out_dir
 
-# Add RTL source files
-add_files -fileset sources_1 [glob ../../rtl/include/*.vh]
-add_files -fileset sources_1 [glob ../../rtl/library/*.v]
-add_files -fileset sources_1 [glob ../../rtl/interrupt/*.v]
-add_files -fileset sources_1 [glob ../../rtl/mmu/*.v]
-add_files -fileset sources_1 [glob ../../rtl/shared_ex/*.v]
-add_files -fileset sources_1 [glob ../../rtl/cache/*.v]
-add_files -fileset sources_1 [glob ../../rtl/core/*.v]
-add_files -fileset sources_1 [glob ../../rtl/bus/*.v]
-add_files -fileset sources_1 ../../rtl/sukuna_top.v
-add_files -fileset sources_1 ./sukuna_kc705_top.v
+# 1. Read Design Sources
+foreach f [glob -nocomplain ../../rtl/library/*.v] {
+    if {[file tail $f] ne "sk_dsp48e1_sim.v"} {
+        read_verilog $f
+    }
+}
+read_verilog [glob -nocomplain ../../rtl/interrupt/*.v]
+read_verilog [glob -nocomplain ../../rtl/mmu/*.v]
+read_verilog [glob -nocomplain ../../rtl/shared_ex/*.v]
+read_verilog [glob -nocomplain ../../rtl/cache/*.v]
+read_verilog [glob -nocomplain ../../rtl/core/*.v]
+read_verilog [glob -nocomplain ../../rtl/bus/*.v]
+read_verilog ../../rtl/sukuna_top.v
+read_verilog ./sukuna_kc705_top.v
 
-# Add Constraints
-add_files -fileset constrs_1 ./kc705.xdc
+# 2. Read Timing and Physical Constraints
+read_xdc ./kc705.xdc
 
-set_property include_dirs [list ../../rtl/include ../../rtl/library] [get_filesets sources_1]
-set_property verilog_define [list SYNTH_KINTEX7=1] [get_filesets sources_1]
-set_property top sukuna_kc705_top [current_fileset]
+# 3. Run Synthesis
+synth_design -top $top -part $part \
+  -include_dirs [list ../../rtl/include ../../rtl/library] \
+  -verilog_define [list SYNTH_KINTEX7=1 PADDR_WIDTH=40 L1I_WAYS=4 L1D_WAYS=4 L2_WAYS=8 L1I_SIZE_BYTES=16384 L1D_SIZE_BYTES=16384 L2_SIZE_BYTES=262144]
 
-# Synthesis
-synth_design -top sukuna_kc705_top -part $part
-write_checkpoint -force synth.dcp
-report_utilization -file synth_utilization.rpt
-report_timing_summary -file synth_timing.rpt
+# 4. Write Checkpoint and Reports
+write_checkpoint -force $out_dir/synth.dcp
+report_utilization -file $out_dir/synth_utilization.rpt -pb $out_dir/synth_utilization.pb
+report_timing_summary -file $out_dir/synth_timing.rpt -max_paths 10
+
+# 5. Extract Fmax
+set wns "N/A"
+set fmax "N/A"
+set path_delay "N/A"
+set paths [get_timing_paths -max_paths 1]
+if {[llength $paths] > 0} {
+    set p [lindex $paths 0]
+    set wns [get_property -quiet SLACK $p]
+    set path_delay [get_property -quiet DATAPATH_DELAY $p]
+    if {$wns ne ""} {
+        set period [expr {5.000 - $wns}]
+        if {$period > 0} {
+            set fmax [format "%.2f" [expr {1000.0 / $period}]]
+        }
+    } elseif {$path_delay ne ""} {
+        if {$path_delay > 0} {
+            set fmax [format "%.2f" [expr {1000.0 / $path_delay}]]
+        }
+    }
+}
+
+puts "======================================================================"
+puts "Vivado KC705 synthesis completed successfully."
+puts "Fmax               : $fmax MHz (Slack: $wns ns, Data Path: $path_delay ns)"
+puts "Utilization report : $out_dir/synth_utilization.rpt"
+puts "Timing report      : $out_dir/synth_timing.rpt"
+puts "===FINAL_TOP_RESULT: FMAX=$fmax : SLACK=$wns : DELAY=$path_delay ==="
+puts "======================================================================"

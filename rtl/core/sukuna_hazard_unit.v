@@ -60,7 +60,7 @@ module sukuna_hazard_unit (
   assign stall_id1_o = upstream_freeze;
   assign stall_id2_o = upstream_freeze;
   assign stall_id3_o = upstream_freeze;
-  assign stall_ex_o  = ex_stall_i;
+  assign stall_ex_o  = shared_eu_stall_i;
 
   // Flush logic
   wire global_flush = branch_mispredict_i || trap_flush_i;

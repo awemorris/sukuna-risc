@@ -105,21 +105,25 @@ module sukuna_agu_eu #(
   reg [XLEN-1:0]          s1_orig_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // AMO State Machine and Reservation Registers
-  localparam S_AGU_IDLE  = 1'b0;
-  localparam S_AGU_STORE = 1'b1;
+  localparam S_AGU_IDLE  = 2'd0;
+  localparam S_AGU_SC    = 2'd1;
+  localparam S_AGU_ALU   = 2'd2;
+  localparam S_AGU_STORE = 2'd3;
 
-  reg                     agu_state_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [1:0]               agu_state_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg                     res_valid_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]   res_paddr_w_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [PADDR_WIDTH-1:2]   store_paddr_w_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]          amo_rdata_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]          amo_wdata_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg                     sc_failed_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     sc_success_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   wire [3:0] s1_amo_type = s1_op_q[7:4];
   wire is_lr             = (s1_amo_type == `AMO_LR);
   wire is_sc             = (s1_amo_type == `AMO_SC);
   wire is_alu_amo        = (s1_amo_type >= `AMO_SWAP && s1_amo_type <= `AMO_MAXU);
-  wire sc_match          = res_valid_q && (res_paddr_w_q == dtlb_paddr_w_i);
+  wire sc_match          = res_valid_q && (res_paddr_w_q == store_paddr_w_q);
 
   // Load Response Formatting
   wire [7:0]  byte_data  = l1d_rdata_i[s1_addr_lsb_q*8 +: 8];
@@ -141,9 +145,9 @@ module sukuna_agu_eu #(
     endcase
   end
 
-  // AMO ALU Operations
+  // AMO ALU Operations (Operates on registered amo_rdata_q)
   wire is_word_amo = (s1_op_q[1:0] == 2'b10);
-  wire [XLEN-1:0] amo_src1 = formatted_rdata;
+  wire [XLEN-1:0] amo_src1 = is_word_amo ? {{32{amo_rdata_q[31]}}, amo_rdata_q[31:0]} : amo_rdata_q;
   wire [XLEN-1:0] amo_src2 = s1_orig_wdata_q;
 
   wire signed [31:0] s32_src1 = amo_src1[31:0];
@@ -151,39 +155,29 @@ module sukuna_agu_eu #(
   wire signed [63:0] s64_src1 = amo_src1;
   wire signed [63:0] s64_src2 = amo_src2;
 
+  wire [63:0] amo_sum = amo_src1 + amo_src2;
+
+  wire signed [63:0] cmp_s1 = is_word_amo ? {{32{s32_src1[31]}}, s32_src1} : s64_src1;
+  wire signed [63:0] cmp_s2 = is_word_amo ? {{32{s32_src2[31]}}, s32_src2} : s64_src2;
+  wire [63:0]        cmp_u1 = is_word_amo ? {32'd0, amo_src1[31:0]} : amo_src1;
+  wire [63:0]        cmp_u2 = is_word_amo ? {32'd0, amo_src2[31:0]} : amo_src2;
+
+  wire cmp_gt_s = (cmp_s1 > cmp_s2);
+  wire cmp_gt_u = (cmp_u1 > cmp_u2);
+
   reg [XLEN-1:0] calc_amo_result;
   always @(*) begin
     case (s1_amo_type)
       `AMO_SWAP: calc_amo_result = amo_src2;
-      `AMO_ADD:  calc_amo_result = is_word_amo ? {{32{1'b0}}, (amo_src1[31:0] + amo_src2[31:0])} : (amo_src1 + amo_src2);
+      `AMO_ADD:  calc_amo_result = amo_sum;
       `AMO_AND:  calc_amo_result = amo_src1 & amo_src2;
       `AMO_OR:   calc_amo_result = amo_src1 | amo_src2;
       `AMO_XOR:  calc_amo_result = amo_src1 ^ amo_src2;
-      `AMO_MAX:  begin
-        if (is_word_amo)
-          calc_amo_result = (s32_src1 > s32_src2) ? {{32{s32_src1[31]}}, amo_src1[31:0]} : {{32{s32_src2[31]}}, amo_src2[31:0]};
-        else
-          calc_amo_result = (s64_src1 > s64_src2) ? amo_src1 : amo_src2;
-      end
-      `AMO_MIN:  begin
-        if (is_word_amo)
-          calc_amo_result = (s32_src1 < s32_src2) ? {{32{s32_src1[31]}}, amo_src1[31:0]} : {{32{s32_src2[31]}}, amo_src2[31:0]};
-        else
-          calc_amo_result = (s64_src1 < s64_src2) ? amo_src1 : amo_src2;
-      end
-      `AMO_MAXU: begin
-        if (is_word_amo)
-          calc_amo_result = (amo_src1[31:0] > amo_src2[31:0]) ? {{32{amo_src1[31]}}, amo_src1[31:0]} : {{32{amo_src2[31]}}, amo_src2[31:0]};
-        else
-          calc_amo_result = (amo_src1 > amo_src2) ? amo_src1 : amo_src2;
-      end
-      `AMO_MINU: begin
-        if (is_word_amo)
-          calc_amo_result = (amo_src1[31:0] < amo_src2[31:0]) ? {{32{amo_src1[31]}}, amo_src1[31:0]} : {{32{amo_src2[31]}}, amo_src2[31:0]};
-        else
-          calc_amo_result = (amo_src1 < amo_src2) ? amo_src1 : amo_src2;
-      end
-      default: calc_amo_result = amo_src2;
+      `AMO_MAX:  calc_amo_result = cmp_gt_s ? amo_src1 : amo_src2;
+      `AMO_MIN:  calc_amo_result = !cmp_gt_s ? amo_src1 : amo_src2;
+      `AMO_MAXU: calc_amo_result = cmp_gt_u ? amo_src1 : amo_src2;
+      `AMO_MINU: calc_amo_result = !cmp_gt_u ? amo_src1 : amo_src2;
+      default:   calc_amo_result = amo_src2;
     endcase
   end
 
@@ -194,32 +188,30 @@ module sukuna_agu_eu #(
   assign dtlb_lookup_valid_o = s1_valid_q;
   assign dtlb_vaddr_w_o      = s1_vaddr_w_q;
 
-  assign l1d_paddr_w_o       = dtlb_paddr_w_i;
+  assign l1d_paddr_w_o       = (agu_state_q == S_AGU_STORE) ? store_paddr_w_q : dtlb_paddr_w_i;
   assign l1d_req_op_o        = s1_op_q[3:0];
   assign l1d_req_byte_en_o   = s1_byte_en_q;
 
   assign l1d_req_valid_o     = (agu_state_q == S_AGU_STORE) ? 1'b1 :
-                               (s1_valid_q && dtlb_hit_i && !(is_sc && !sc_match) && !l1d_resp_valid_i);
+                               (s1_valid_q && dtlb_hit_i && !is_sc && !l1d_resp_valid_i);
 
   assign l1d_req_write_o     = (agu_state_q == S_AGU_STORE) ? 1'b1 :
-                               is_alu_amo ? 1'b0 :
-                               is_sc ? sc_match : s1_op_q[3];
+                               (is_alu_amo || is_sc) ? 1'b0 : s1_op_q[3];
 
   assign l1d_wdata_o         = (agu_state_q == S_AGU_STORE) ? amo_wdata_q : s1_wdata_q;
 
   // Response Generation
-  wire normal_resp_valid = (agu_state_q == S_AGU_IDLE) && !is_alu_amo &&
-                           ((is_sc && !sc_match) ? s1_valid_q : l1d_resp_valid_i);
-  wire amo_resp_valid    = (agu_state_q == S_AGU_STORE) && l1d_resp_valid_i;
+  wire normal_resp_valid  = (agu_state_q == S_AGU_IDLE) && !is_alu_amo && !is_sc && l1d_resp_valid_i;
+  wire sc_fail_resp_valid = (agu_state_q == S_AGU_IDLE) && sc_failed_q;
+  wire store_resp_valid   = (agu_state_q == S_AGU_STORE) && l1d_resp_valid_i;
 
-  assign resp_valid_o = normal_resp_valid || amo_resp_valid;
+  assign resp_valid_o = normal_resp_valid || sc_fail_resp_valid || store_resp_valid;
   assign resp_rd_o    = s1_rd_q;
-  assign resp_rdata_o = (agu_state_q == S_AGU_STORE) ? amo_rdata_q :
-                        (is_sc && !sc_match)          ? 64'd1 :
-                        (is_sc && sc_match)           ? 64'd0 : formatted_rdata;
+  assign resp_rdata_o = (agu_state_q == S_AGU_STORE) ? (sc_success_q ? 64'd0 : amo_rdata_q) :
+                        sc_failed_q                   ? 64'd1 : formatted_rdata;
 
   // Busy Signal
-  assign busy_o = (s1_valid_q && !resp_valid_o) || (agu_state_q != S_AGU_IDLE) || l1d_miss_stall_i;
+  assign busy_o = (!resp_valid_o && (s1_valid_q || agu_state_q != S_AGU_IDLE || sc_failed_q)) || l1d_miss_stall_i;
 
   // Pipeline Registers and State
   always @(posedge clk_i or negedge rst_ni) begin
@@ -235,9 +227,11 @@ module sukuna_agu_eu #(
       agu_state_q     <= S_AGU_IDLE;
       res_valid_q     <= 1'b0;
       res_paddr_w_q   <= {(PADDR_WIDTH-2){1'b0}};
+      store_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
       amo_rdata_q     <= {XLEN{1'b0}};
       amo_wdata_q     <= {XLEN{1'b0}};
       sc_failed_q     <= 1'b0;
+      sc_success_q    <= 1'b0;
     end else begin
       // Multi-hart coherence snoop invalidation: clear reservation if matching cache line
       if (snoop_inv_valid_i && (snoop_inv_paddr_w_i[PADDR_WIDTH-1:6] == res_paddr_w_q[PADDR_WIDTH-1:6])) begin
@@ -246,18 +240,21 @@ module sukuna_agu_eu #(
 
       case (agu_state_q)
         S_AGU_IDLE: begin
-          if (s1_valid_q) begin
-            if (is_sc && !sc_match) begin
-              // SC failed: clear reservation and finish in 1 cycle
-              res_valid_q <= 1'b0;
-              s1_valid_q  <= req_valid_i;
-              s1_op_q     <= req_op_i;
-              s1_byte_en_q<= calc_byte_en;
-              s1_rd_q     <= req_rd_i;
-              s1_vaddr_w_q<= calc_vaddr[VADDR_WIDTH-1:2];
-              s1_addr_lsb_q <= calc_vaddr[2:0];
-              s1_wdata_q  <= aligned_wdata;
-              s1_orig_wdata_q <= req_wdata_i;
+          if (sc_failed_q) begin
+            sc_failed_q <= 1'b0;
+            s1_valid_q  <= req_valid_i;
+            s1_op_q     <= req_op_i;
+            s1_byte_en_q<= calc_byte_en;
+            s1_rd_q     <= req_rd_i;
+            s1_vaddr_w_q<= calc_vaddr[VADDR_WIDTH-1:2];
+            s1_addr_lsb_q <= calc_vaddr[2:0];
+            s1_wdata_q  <= aligned_wdata;
+            s1_orig_wdata_q <= req_wdata_i;
+          end else if (s1_valid_q) begin
+            if (is_sc) begin
+              // SC: latch physical address and transition to S_AGU_SC to check reservation next cycle
+              store_paddr_w_q <= dtlb_paddr_w_i;
+              agu_state_q     <= S_AGU_SC;
             end else if (l1d_resp_valid_i) begin
               if (is_lr) begin
                 // LR sets reservation
@@ -271,22 +268,11 @@ module sukuna_agu_eu #(
                 s1_addr_lsb_q <= calc_vaddr[2:0];
                 s1_wdata_q    <= aligned_wdata;
                 s1_orig_wdata_q <= req_wdata_i;
-              end else if (is_sc) begin
-                // SC succeeded: clears reservation
-                res_valid_q   <= 1'b0;
-                s1_valid_q    <= req_valid_i;
-                s1_op_q       <= req_op_i;
-                s1_byte_en_q  <= calc_byte_en;
-                s1_rd_q       <= req_rd_i;
-                s1_vaddr_w_q  <= calc_vaddr[VADDR_WIDTH-1:2];
-                s1_addr_lsb_q <= calc_vaddr[2:0];
-                s1_wdata_q    <= aligned_wdata;
-                s1_orig_wdata_q <= req_wdata_i;
               end else if (is_alu_amo) begin
-                // AMO read completed: transition to store step
-                amo_rdata_q <= formatted_rdata;
-                amo_wdata_q <= amo_wdata_aligned;
-                agu_state_q <= S_AGU_STORE;
+                // AMO read completed: latch read data and transition to ALU calculation step
+                store_paddr_w_q <= dtlb_paddr_w_i;
+                amo_rdata_q     <= formatted_rdata;
+                agu_state_q     <= S_AGU_ALU;
               end else begin
                 // Normal load/store
                 if (s1_op_q[3]) begin
@@ -314,18 +300,37 @@ module sukuna_agu_eu #(
           end
         end
 
+        S_AGU_SC: begin
+          res_valid_q <= 1'b0; // SC always clears reservation
+          if (sc_match) begin
+            sc_success_q <= 1'b1;
+            amo_wdata_q  <= s1_wdata_q;
+            agu_state_q  <= S_AGU_STORE;
+          end else begin
+            sc_failed_q  <= 1'b1;
+            agu_state_q  <= S_AGU_IDLE;
+          end
+        end
+
+        S_AGU_ALU: begin
+          // Calculate AMO ALU from registered amo_rdata_q and latch write data
+          amo_wdata_q <= amo_wdata_aligned;
+          agu_state_q <= S_AGU_STORE;
+        end
+
         S_AGU_STORE: begin
           if (l1d_resp_valid_i) begin
-            // AMO store completed
-            res_valid_q <= 1'b0;
-            agu_state_q <= S_AGU_IDLE;
-            s1_valid_q  <= req_valid_i;
-            s1_op_q     <= req_op_i;
-            s1_byte_en_q<= calc_byte_en;
-            s1_rd_q     <= req_rd_i;
-            s1_vaddr_w_q<= calc_vaddr[VADDR_WIDTH-1:2];
-            s1_addr_lsb_q <= calc_vaddr[2:0];
-            s1_wdata_q  <= aligned_wdata;
+            // AMO / SC store completed
+            res_valid_q  <= 1'b0;
+            sc_success_q <= 1'b0;
+            agu_state_q  <= S_AGU_IDLE;
+            s1_valid_q   <= req_valid_i;
+            s1_op_q      <= req_op_i;
+            s1_byte_en_q <= calc_byte_en;
+            s1_rd_q      <= req_rd_i;
+            s1_vaddr_w_q <= calc_vaddr[VADDR_WIDTH-1:2];
+            s1_addr_lsb_q<= calc_vaddr[2:0];
+            s1_wdata_q   <= aligned_wdata;
             s1_orig_wdata_q <= req_wdata_i;
           end
         end

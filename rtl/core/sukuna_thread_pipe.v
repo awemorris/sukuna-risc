@@ -116,6 +116,16 @@ module sukuna_thread_pipe #(
   wire [XLEN-1:0] trap_target_pc;
   wire trap_flush;
   wire wfi_sleep;
+  wire interrupt_pending;
+  wire [5:0] interrupt_cause;
+
+  // Hold & Slot Age signals for Zero-MUX Non-Shifting Dual-Issue
+  wire hold_slot0;
+  wire hold_slot1;
+  wire id1_slot1_older;
+  wire id2_slot1_older;
+  wire ex_slot1_older;
+  wire ex_wb_slot1_older;
 
   // --------------------------------------------------------------------------
   // Stage Interconnects
@@ -291,6 +301,7 @@ module sukuna_thread_pipe #(
     .stall_i          (stall_if2),
     .flush_i          (flush_if2),
     .redirect_pc_i    (if1_redirect_pc),
+    .consume_step_i   (fetch_step),
     .fetch_req_valid_o(fetch_req_valid),
     .fetch_req_pc_o   (fetch_req_pc),
     .l1i_resp_valid_i (l1i_resp_valid_i),
@@ -314,6 +325,8 @@ module sukuna_thread_pipe #(
     .rst_ni             (rst_ni),
     .stall_i            (stall_id1),
     .flush_i            (flush_id1),
+    .hold_slot0_i       (hold_slot0),
+    .hold_slot1_i       (hold_slot1),
     .if2_valid0_i       (if2_valid0),
     .if2_pc0_i          (if2_pc0),
     .if2_inst0_i        (if2_inst0),
@@ -354,7 +367,8 @@ module sukuna_thread_pipe #(
     .id1_alu_op1_o      (id1_alu_op1),
     .id1_mem_op1_o      (id1_mem_op1),
     .id1_is_word1_o     (id1_is_word1),
-    .id1_use_imm1_o     (id1_use_imm1)
+    .id1_use_imm1_o     (id1_use_imm1),
+    .id1_slot1_older_o  (id1_slot1_older)
   );
 
   // --------------------------------------------------------------------------
@@ -453,7 +467,11 @@ module sukuna_thread_pipe #(
     .id1_mem_op1_i      (id1_mem_op1),
     .id1_is_word1_i     (id1_is_word1),
     .id1_use_imm1_i     (id1_use_imm1),
+    .id1_slot1_older_i  (id1_slot1_older),
+    .hold_slot0_o       (hold_slot0),
+    .hold_slot1_o       (hold_slot1),
     .consume_step_o     (fetch_step),
+    .id2_slot1_older_o  (id2_slot1_older),
     .id2_valid0_o       (id2_valid0),
     .id2_pc0_o          (id2_pc0),
     .id2_rd0_o          (id2_rd0),
@@ -530,6 +548,7 @@ module sukuna_thread_pipe #(
     .id2_int_en_l1_i    (id2_int_en_l1),
     .id2_ma_en_l0_i     (id2_ma_en_l0),
     .id2_ma_en_l1_i     (id2_ma_en_l1),
+    .id2_slot1_older_i  (id2_slot1_older),
     .rf_rdata_l0_rs1_i  (rf_rdata_l0_rs1),
     .rf_rdata_l0_rs2_i  (rf_rdata_l0_rs2),
     .rf_rdata_l1_rs1_i  (rf_rdata_l1_rs1),
@@ -545,9 +564,15 @@ module sukuna_thread_pipe #(
     .fwd_ex_val_i       (ex_wb_l0_valid),
     .fwd_ex_rd_i        (ex_wb_l0_rd),
     .fwd_ex_data_i      (ex_wb_l0_data),
+    .fwd_ex_l1_val_i    (ex_wb_l1_valid),
+    .fwd_ex_l1_rd_i     (ex_wb_l1_rd),
+    .fwd_ex_l1_data_i   (ex_wb_l1_data),
     .fwd_wb_l0_val_i    (rf_wen_p0),
     .fwd_wb_l0_rd_i     (rf_waddr_p0),
     .fwd_wb_l0_data_i   (rf_wdata_p0),
+    .fwd_wb_l1_val_i    (rf_wen_p1),
+    .fwd_wb_l1_rd_i     (rf_waddr_p1),
+    .fwd_wb_l1_data_i   (rf_wdata_p1),
     .ex_l0_valid_o      (ex_l0_valid),
     .ex_l0_pc_o         (ex_l0_pc),
     .ex_l0_rd_o         (ex_l0_rd),
@@ -584,7 +609,8 @@ module sukuna_thread_pipe #(
     .ex_l0_rs1_o        (ex_l0_rs1),
     .ex_l0_rs2_o        (ex_l0_rs2),
     .ex_l1_rs1_o        (ex_l1_rs1),
-    .ex_l1_rs2_o        (ex_l1_rs2)
+    .ex_l1_rs2_o        (ex_l1_rs2),
+    .ex_slot1_older_o   (ex_slot1_older)
   );
 
   // --------------------------------------------------------------------------
@@ -640,6 +666,7 @@ module sukuna_thread_pipe #(
     .int_en_l1_i        (ex_int_en_l1),
     .ma_en_l0_i         (ex_ma_en_l0),
     .ma_en_l1_i         (ex_ma_en_l1),
+    .ex_slot1_older_i   (ex_slot1_older),
     .fpr_src1_i         (ex_l0_fpr_src1),
     .fpr_src2_i         (ex_l0_fpr_src2),
     .wb_fpr_wen_i       (wb_fpr_wen),
@@ -691,7 +718,8 @@ module sukuna_thread_pipe #(
     .ex_wb_l1_data_o    (ex_wb_l1_data),
     .ex_wb_l1_exc_o     (ex_wb_l1_exc),
     .ex_wb_l1_cause_o   (ex_wb_l1_cause),
-    .ex_wb_l1_tval_o    (ex_wb_l1_tval)
+    .ex_wb_l1_tval_o    (ex_wb_l1_tval),
+    .ex_wb_slot1_older_o(ex_wb_slot1_older)
   );
 
   // Shared EU Requests
@@ -733,6 +761,9 @@ module sukuna_thread_pipe #(
     .l1_exc_i         (ex_wb_l1_exc),
     .l1_cause_i       (ex_wb_l1_cause),
     .l1_tval_i        (ex_wb_l1_tval),
+    .slot1_older_i    (ex_wb_slot1_older),
+    .interrupt_pending_i(interrupt_pending),
+    .interrupt_cause_i(interrupt_cause),
     .shared_valid_i   (shared_resp_valid_i),
     .shared_rd_i      (shared_resp_rd_i),
     .shared_data_i    (shared_resp_data_i),
@@ -830,8 +861,8 @@ module sukuna_thread_pipe #(
     .priv_mode_o        (priv_mode),
     .sfence_flush_o     (sfence_flush_o),
     .wfi_sleep_o        (wfi_sleep),
-    .interrupt_pending_o(),
-    .interrupt_cause_o  ()
+    .interrupt_pending_o(interrupt_pending),
+    .interrupt_cause_o  (interrupt_cause)
   );
 
 endmodule

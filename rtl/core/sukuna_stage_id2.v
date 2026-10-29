@@ -56,11 +56,15 @@ module sukuna_stage_id2 #(
   input  wire [7:0]       id1_mem_op1_i,
   input  wire             id1_is_word1_i,
   input  wire             id1_use_imm1_i,
+  input  wire             id1_slot1_older_i,
 
-  // Feedback to fetch: how many instructions to advance (1 or 2)
+  // Feedback to fetch and ID1
+  output wire             hold_slot0_o,
+  output wire             hold_slot1_o,
   output wire [1:0]       consume_step_o,
 
   // Pipeline Registers to ID3 (Lane 0: older, Lane 1: younger)
+  output reg              id2_slot1_older_o,/* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              id2_valid0_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0]  id2_pc0_o,        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [4:0]       id2_rd0_o,        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -98,33 +102,20 @@ module sukuna_stage_id2 #(
 );
 
   // --------------------------------------------------------------------------
-  // Dependency & Hazard Analysis between Lane 0 (Older) and Lane 1 (Younger)
+  // Dependency & Hazard Analysis between Lane 0 and Lane 1
   // --------------------------------------------------------------------------
-  // RAW Hazard Check: Lane 1 reads a destination register being produced by Lane 0
+  // Normal Mode (slot1_older == 0): Lane 0 is Older, Lane 1 is Younger
   wire raw_hazard = id1_valid0_i && id1_valid1_i && (id1_rd0_i != 5'd0) &&
                     ((id1_rs1_1_i == id1_rd0_i) || (id1_rs2_1_i == id1_rd0_i));
 
-  // WAW Hazard Check: Lane 0 and Lane 1 write to the same destination register
   wire waw_hazard = id1_valid0_i && id1_valid1_i && (id1_rd0_i != 5'd0) &&
                     (id1_rd0_i == id1_rd1_i);
 
-  // MEM -> INT Load-to-Use Dependency Check:
-  // Lane 0 is MEM (Load) and Lane 1 (INT) reads rd0 as rs1 or rs2.
-  // Because MEM latency is 2 cycles (address gen + L1D cache access), dual-issuing
-  // [MEM, INT] when INT uses MEM's result would force INT to stall inside the EX stage.
-  // Implementing an intra-EX stall path and dedicated cross-EU forwarding multiplexer
-  // from L1D output to ALU input adds heavy wiring congestion and timing overhead at 1.5 GHz.
-  // Therefore, this dependency is strictly resolved by prohibiting dual-issue at ID2:
-  // Lane 0 is issued as a single instruction, Lane 1 receives a bubble (valid=0),
-  // and INT is issued on the following cycle. This completely eliminates EX stall wires.
   wire mem_to_int_raw_hazard = id1_valid0_i && id1_valid1_i &&
                                (id1_type0_i == 2'b10) && (id1_type1_i == 2'b01) &&
                                (id1_rd0_i != 5'd0) &&
                                ((id1_rs1_1_i == id1_rd0_i) || (id1_rs2_1_i == id1_rd0_i));
 
-  // Dual-Issue Eligibility Checking:
-  // Strictly prevented if Lane 0 is a Branch, Jump, or System/Privileged instruction,
-  // or if there is any RAW/WAW hazard or MEM->INT dependency.
   wire can_dual_int_ma = id1_valid0_i && id1_valid1_i &&
                          (id1_type0_i == 2'b01) && (id1_type1_i == 2'b10) &&
                          (id1_sys_op0_i == `SYS_NONE) &&
@@ -139,13 +130,33 @@ module sukuna_stage_id2 #(
                          (id1_jump_type0_i == `JUMP_NONE) &&
                          !raw_hazard && !waw_hazard && !mem_to_int_raw_hazard && !ma_eu_busy_i;
 
-  wire dual_issue_success = 1'b0;
+  wire can_dual_normal = id1_valid0_i && id1_valid1_i && !ma_eu_busy_i &&
+                         (id1_type0_i == 2'b01 && id1_type1_i == 2'b10) &&
+                         (id1_sys_op0_i == `SYS_NONE) &&
+                         (id1_br_type0_i == `BR_NONE) &&
+                         (id1_jump_type0_i == `JUMP_NONE) &&
+                         !raw_hazard && !waw_hazard;
 
-  assign consume_step_o = (!id1_valid0_i) ? 2'd0 :
-                          dual_issue_success ? 2'd2 : 2'd1;
+  // Inverted Mode (slot1_older == 1)
+  wire raw_hazard_inv = 1'b0;
+  wire waw_hazard_inv = 1'b0;
+  wire mem_to_int_raw_inv = 1'b0;
+  wire can_dual_int_ma_inv = 1'b0;
+  wire can_dual_ma_int_inv = 1'b0;
+  wire can_dual_inv = 1'b0;
+
+  // Hold & Fetch advance controls
+  assign hold_slot1_o = 1'b0;
+  assign hold_slot0_o = 1'b0;
+
+  assign consume_step_o = 2'd0;
+
+  wire l0_issue = id1_valid0_i;
+  wire l1_issue = can_dual_normal;
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
+      id2_slot1_older_o <= 1'b0;
       id2_valid0_o      <= 1'b0;
       id2_pc0_o         <= {XLEN{1'b0}};
       id2_rd0_o         <= 5'd0;
@@ -181,15 +192,16 @@ module sukuna_stage_id2 #(
       id2_ma_en_l1_o    <= 1'b0;
     end else begin
       if (flush_i) begin
-        id2_valid0_o    <= 1'b0;
-        id2_valid1_o    <= 1'b0;
-        id2_int_en_l0_o <= 1'b0;
-        id2_int_en_l1_o <= 1'b0;
-        id2_ma_en_l0_o  <= 1'b0;
-        id2_ma_en_l1_o  <= 1'b0;
+        id2_slot1_older_o <= 1'b0;
+        id2_valid0_o      <= 1'b0;
+        id2_valid1_o      <= 1'b0;
+        id2_int_en_l0_o   <= 1'b0;
+        id2_int_en_l1_o   <= 1'b0;
+        id2_ma_en_l0_o    <= 1'b0;
+        id2_ma_en_l1_o    <= 1'b0;
       end else if (!stall_i) begin
         // Lane 0: Straight propagation
-        id2_valid0_o      <= id1_valid0_i;
+        id2_valid0_o      <= l0_issue;
         id2_pc0_o         <= id1_pc0_i;
         id2_rd0_o         <= id1_rd0_i;
         id2_rs1_0_o       <= id1_rs1_0_i;
@@ -208,7 +220,7 @@ module sukuna_stage_id2 #(
         id2_use_pc0_o     <= id1_use_pc0_i;
 
         // Lane 1: Injected with half-width bubble if single-issue
-        id2_valid1_o      <= dual_issue_success;
+        id2_valid1_o      <= l1_issue;
         id2_pc1_o         <= id1_pc1_i;
         id2_rd1_o         <= id1_rd1_i;
         id2_rs1_1_o       <= id1_rs1_1_i;
@@ -219,11 +231,20 @@ module sukuna_stage_id2 #(
         id2_is_word1_o    <= id1_is_word1_i;
         id2_use_imm1_o    <= id1_use_imm1_i;
 
+        id2_slot1_older_o <= id1_slot1_older_i;
+
         // Routing Enable Bits to EX stage
-        id2_int_en_l0_o   <= id1_valid0_i && (id1_type0_i == 2'b01 || id1_br_type0_i != `BR_NONE || id1_jump_type0_i != `JUMP_NONE);
-        id2_int_en_l1_o   <= dual_issue_success && (id1_type1_i == 2'b01);
-        id2_ma_en_l0_o    <= id1_valid0_i && (id1_type0_i == 2'b10);
-        id2_ma_en_l1_o    <= dual_issue_success && (id1_type1_i == 2'b10);
+        if (id1_slot1_older_i) begin
+          id2_int_en_l0_o <= l0_issue && (id1_type0_i == 2'b01);
+          id2_ma_en_l0_o  <= l0_issue && (id1_type0_i == 2'b10);
+          id2_int_en_l1_o <= l1_issue && (id1_type1_i == 2'b01);
+          id2_ma_en_l1_o  <= l1_issue && (id1_type1_i == 2'b10);
+        end else begin
+          id2_int_en_l0_o <= l0_issue && (id1_type0_i == 2'b01 || id1_jump_type0_i != `JUMP_NONE);
+          id2_ma_en_l0_o  <= l0_issue && (id1_type0_i == 2'b10);
+          id2_int_en_l1_o <= l1_issue && (id1_type1_i == 2'b01);
+          id2_ma_en_l1_o  <= l1_issue && (id1_type1_i == 2'b10);
+        end
       end
     end
   end

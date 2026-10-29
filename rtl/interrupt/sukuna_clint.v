@@ -38,6 +38,9 @@ module sukuna_clint #(
   // Per-Hart 64-bit mtimecmp registers
   reg [63:0] mtimecmp_q [0:NUM_HARTS-1];
 
+  // Per-Hart 1-bit timer interrupt registers
+  reg [NUM_HARTS-1:0] timer_irq_q;             /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
   // Per-Hart 1-bit msip registers
   reg [NUM_HARTS-1:0] msip_q;                   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
@@ -47,7 +50,7 @@ module sukuna_clint #(
   genvar h;
   generate
     for (h = 0; h < NUM_HARTS; h = h + 1) begin : gen_irq
-      assign timer_irq_o[h]    = (mtime_q >= mtimecmp_q[h]);
+      assign timer_irq_o[h]    = timer_irq_q[h];
       assign software_irq_o[h] = msip_q[h];
     end
   endgenerate
@@ -85,6 +88,7 @@ module sukuna_clint #(
     if (!rst_ni) begin
       mtime_q      <= 64'd0;
       msip_q       <= {NUM_HARTS{1'b0}};
+      timer_irq_q  <= {NUM_HARTS{1'b0}};
       resp_valid_o <= 1'b0;
       resp_rdata_o <= {XLEN{1'b0}};
       for (i = 0; i < NUM_HARTS; i = i + 1) begin
@@ -93,6 +97,11 @@ module sukuna_clint #(
     end else begin
       // Free-running timer increment
       mtime_q <= mtime_q + 1'b1;
+
+      // Registered timer interrupt evaluation
+      for (i = 0; i < NUM_HARTS; i = i + 1) begin
+        timer_irq_q[i] <= (mtime_q >= mtimecmp_q[i]);
+      end
 
       // Single-cycle MMIO response
       resp_valid_o <= req_valid_i;

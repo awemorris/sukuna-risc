@@ -3,6 +3,7 @@
 // Complies with design-rule.md:
 //   - Array registers strictly instantiated using sk_ram_ff
 //   - Dual-bank replication for 4 concurrent asynchronous read ports
+//   - Multi-write-port support (Port 0: Lane 0 INT, Port 1: Lane 1 MA, Port 2: Shared EU)
 // ============================================================================
 
 `include "sukuna_defines.vh"
@@ -41,13 +42,6 @@ module sukuna_regfile #(
   input  wire [XLEN-1:0]  wdata_p2_i
 );
 
-  // Write arbitration / priority for replicated banks
-  wire             we_active   = wen_p0_i | wen_p1_i | wen_p2_i;
-  wire [4:0]       waddr_mux   = wen_p0_i ? waddr_p0_i :
-                                 wen_p1_i ? waddr_p1_i : waddr_p2_i;
-  wire [XLEN-1:0]  wdata_mux   = wen_p0_i ? wdata_p0_i :
-                                 wen_p1_i ? wdata_p1_i : wdata_p2_i;
-
   // Bank 0: Serves Slot 0 reads (rs1, rs2)
   sk_ram_ff #(
     .DATA_WIDTH(XLEN),
@@ -57,9 +51,15 @@ module sukuna_regfile #(
   ) u_bank0 (
     .clk_i    (clk_i),
     .rst_ni   (rst_ni),
-    .wen_i    (we_active),
-    .waddr_i  (waddr_mux),
-    .wdata_i  (wdata_mux),
+    .wen_i    (wen_p0_i),
+    .waddr_i  (waddr_p0_i),
+    .wdata_i  (wdata_p0_i),
+    .wen1_i   (wen_p1_i),
+    .waddr1_i (waddr_p1_i),
+    .wdata1_i (wdata_p1_i),
+    .wen2_i   (wen_p2_i),
+    .waddr2_i (waddr_p2_i),
+    .wdata2_i (wdata_p2_i),
     .raddr_a_i(raddr_s0_rs1_i),
     .rdata_a_o(rdata_s0_rs1_o),
     .raddr_b_i(raddr_s0_rs2_i),
@@ -75,9 +75,15 @@ module sukuna_regfile #(
   ) u_bank1 (
     .clk_i    (clk_i),
     .rst_ni   (rst_ni),
-    .wen_i    (we_active),
-    .waddr_i  (waddr_mux),
-    .wdata_i  (wdata_mux),
+    .wen_i    (wen_p0_i),
+    .waddr_i  (waddr_p0_i),
+    .wdata_i  (wdata_p0_i),
+    .wen1_i   (wen_p1_i),
+    .waddr1_i (waddr_p1_i),
+    .wdata1_i (wdata_p1_i),
+    .wen2_i   (wen_p2_i),
+    .waddr2_i (waddr_p2_i),
+    .wdata2_i (wdata_p2_i),
     .raddr_a_i(raddr_s1_rs1_i),
     .rdata_a_o(rdata_s1_rs1_o),
     .raddr_b_i(raddr_s1_rs2_i),

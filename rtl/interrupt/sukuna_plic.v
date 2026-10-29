@@ -46,27 +46,99 @@ module sukuna_plic #(
   assign req_ready_o = 1'b1;
 
   // --------------------------------------------------------------------------
-  // Interrupt Arbitration & Notification per Context
+  // Interrupt Arbitration & Notification per Context (Binary Tournament Tree)
   // --------------------------------------------------------------------------
-  reg [NUM_CONTEXTS-1:0] context_irq;
-  reg [4:0]              context_max_id   [0:NUM_CONTEXTS-1];
-  reg [2:0]              context_max_prio [0:NUM_CONTEXTS-1];
+  reg [NUM_CONTEXTS-1:0] context_irq_q;
+  reg [4:0]              context_max_id_q   [0:NUM_CONTEXTS-1];
+  reg [2:0]              context_max_prio_q [0:NUM_CONTEXTS-1];
 
-  integer c, s;
-  always @(*) begin
-    for (c = 0; c < NUM_CONTEXTS; c = c + 1) begin
-      context_max_id[c]   = 5'd0;
-      context_max_prio[c] = 3'd0;
-      context_irq[c]      = 1'b0;
+  function [7:0] plic_cand_max;
+    input [7:0] a; // [7:5] = prio, [4:0] = id
+    input [7:0] b;
+    reg [2:0] p_a, p_b;
+    reg [4:0] id_a, id_b;
+    begin
+      p_a  = a[7:5];
+      id_a = a[4:0];
+      p_b  = b[7:5];
+      id_b = b[4:0];
+      if (p_a > p_b) begin
+        plic_cand_max = a;
+      end else if (p_b > p_a) begin
+        plic_cand_max = b;
+      end else begin
+        // Equal priority: lower ID wins (RISC-V PLIC specification)
+        plic_cand_max = (id_a <= id_b) ? a : b;
+      end
+    end
+  endfunction
 
-      for (s = 1; s < NUM_SOURCES; s = s + 1) begin
-        if (pending_q[s] && enable_q[c][s] && (priority_q[s] > threshold_q[c])) begin
-          if (priority_q[s] > context_max_prio[c]) begin
-            context_max_prio[c] = priority_q[s];
-            context_max_id[c]   = s[4:0];
-            context_irq[c]      = 1'b1;
-          end
+  wire [7:0] l0_cand [0:NUM_CONTEXTS-1][0:31];
+  wire [7:0] l1_cand [0:NUM_CONTEXTS-1][0:15];
+  wire [7:0] l2_cand [0:NUM_CONTEXTS-1][0:7];
+
+  reg  [7:0] s1_cand_q [0:NUM_CONTEXTS-1][0:7];
+
+  wire [7:0] l3_cand [0:NUM_CONTEXTS-1][0:3];
+  wire [7:0] l4_cand [0:NUM_CONTEXTS-1][0:1];
+  wire [7:0] l5_winner [0:NUM_CONTEXTS-1];
+
+  genvar gc, gs;
+  generate
+    for (gc = 0; gc < NUM_CONTEXTS; gc = gc + 1) begin : gen_ctx_tree
+      // Source 0 is reserved (always 0 priority)
+      assign l0_cand[gc][0] = 8'd0;
+      for (gs = 1; gs < 32; gs = gs + 1) begin : gen_l0
+        wire act = pending_q[gs] && enable_q[gc][gs] && (priority_q[gs] > threshold_q[gc]);
+        assign l0_cand[gc][gs] = act ? {priority_q[gs], gs[4:0]} : 8'd0;
+      end
+
+      // Level 1: 32 -> 16
+      for (gs = 0; gs < 16; gs = gs + 1) begin : gen_l1
+        assign l1_cand[gc][gs] = plic_cand_max(l0_cand[gc][2*gs], l0_cand[gc][2*gs+1]);
+      end
+
+      // Level 2: 16 -> 8
+      for (gs = 0; gs < 8; gs = gs + 1) begin : gen_l2
+        assign l2_cand[gc][gs] = plic_cand_max(l1_cand[gc][2*gs], l1_cand[gc][2*gs+1]);
+      end
+
+      // Level 3: 8 -> 4 (takes Stage 1 registered candidates)
+      for (gs = 0; gs < 4; gs = gs + 1) begin : gen_l3
+        assign l3_cand[gc][gs] = plic_cand_max(s1_cand_q[gc][2*gs], s1_cand_q[gc][2*gs+1]);
+      end
+
+      // Level 4: 4 -> 2
+      for (gs = 0; gs < 2; gs = gs + 1) begin : gen_l4
+        assign l4_cand[gc][gs] = plic_cand_max(l3_cand[gc][2*gs], l3_cand[gc][2*gs+1]);
+      end
+
+      // Level 5: 2 -> 1
+      assign l5_winner[gc] = plic_cand_max(l4_cand[gc][0], l4_cand[gc][1]);
+    end
+  endgenerate
+
+  integer c, cs;
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      context_irq_q <= {NUM_CONTEXTS{1'b0}};
+      for (c = 0; c < NUM_CONTEXTS; c = c + 1) begin
+        context_max_id_q[c]   <= 5'd0;
+        context_max_prio_q[c] <= 3'd0;
+        for (cs = 0; cs < 8; cs = cs + 1) begin
+          s1_cand_q[c][cs] <= 8'd0;
         end
+      end
+    end else begin
+      for (c = 0; c < NUM_CONTEXTS; c = c + 1) begin
+        // Pipeline Stage 1 registers (8 candidates)
+        for (cs = 0; cs < 8; cs = cs + 1) begin
+          s1_cand_q[c][cs] <= l2_cand[c][cs];
+        end
+        // Pipeline Stage 2 registers (final winner)
+        context_max_prio_q[c] <= l5_winner[c][7:5];
+        context_max_id_q[c]   <= l5_winner[c][4:0];
+        context_irq_q[c]      <= (l5_winner[c][7:5] > 3'd0);
       end
     end
   end
@@ -75,8 +147,8 @@ module sukuna_plic #(
   genvar h;
   generate
     for (h = 0; h < NUM_HARTS; h = h + 1) begin : gen_ext_irqs
-      assign meip_o[h] = context_irq[h];
-      assign seip_o[h] = context_irq[NUM_HARTS + h];
+      assign meip_o[h] = context_irq_q[h];
+      assign seip_o[h] = context_irq_q[NUM_HARTS + h];
     end
   endgenerate
 
@@ -108,7 +180,7 @@ module sukuna_plic #(
       if (ctx_idx < NUM_CONTEXTS) begin
         if (offset[2]) begin
           // Claim Read (offset + 4)
-          rdata_comb = {59'd0, context_max_id[ctx_idx]};
+          rdata_comb = {59'd0, context_max_id_q[ctx_idx]};
         end else begin
           // Threshold (offset + 0)
           rdata_comb = {61'd0, threshold_q[ctx_idx]};
@@ -144,8 +216,8 @@ module sukuna_plic #(
 
       // Handle Claim (clears claimed interrupt pending bit on read)
       if (req_valid_i && !req_write_i && (offset >= 24'h200000) && offset[2]) begin
-        if (ctx_idx < NUM_CONTEXTS && (context_max_id[ctx_idx] != 5'd0)) begin
-          pending_q[context_max_id[ctx_idx]] <= 1'b0;
+        if (ctx_idx < NUM_CONTEXTS && (context_max_id_q[ctx_idx] != 5'd0)) begin
+          pending_q[context_max_id_q[ctx_idx]] <= 1'b0;
         end
       end
 

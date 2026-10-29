@@ -101,6 +101,64 @@ module sk_mul #(
         );
         assign p = dsp_p[AW+BW-1:0];
 
+      end else if (AW >= 33 && BW >= 33 && LAT >= 3) begin : gen_kintex7_dsp_decomposed
+        // --------------------------------------------------------------------
+        // High-Speed Decomposed 4-way 32x32 DSP Multiplier (Runs > 350 MHz)
+        // --------------------------------------------------------------------
+        wire signed [AW:0] ext_a = SIGNED ? {a[AW-1], a} : {1'b0, a};
+        wire signed [BW:0] ext_b = SIGNED ? {b[BW-1], b} : {1'b0, b};
+
+        // Stage 1: Register Inputs
+        reg [31:0] a_l_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg signed [AW-32:0] a_h_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg [31:0] b_l_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg signed [BW-32:0] b_h_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+        always @(posedge clk) begin
+          if (en) begin
+            a_l_q <= ext_a[31:0];
+            a_h_q <= ext_a[AW:32];
+            b_l_q <= ext_b[31:0];
+            b_h_q <= ext_b[BW:32];
+          end
+        end
+
+        // Stage 2: Parallel DSP Multiplications (each <= 33x33 bits, max 4 DSPs)
+        (* use_dsp = "yes" *) wire [63:0] prod_ll = a_l_q * b_l_q;
+        (* use_dsp = "yes" *) wire signed [AW:0] prod_hl = a_h_q * $signed({1'b0, b_l_q});
+        (* use_dsp = "yes" *) wire signed [BW:0] prod_lh = $signed({1'b0, a_l_q}) * b_h_q;
+        (* use_dsp = "yes" *) wire signed [(AW-32+1)+(BW-32+1)-1:0] prod_hh = a_h_q * b_h_q;
+
+        reg [63:0] prod_ll_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg signed [AW:0] prod_hl_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg signed [BW:0] prod_lh_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg signed [(AW-32+1)+(BW-32+1)-1:0] prod_hh_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+        always @(posedge clk) begin
+          if (en) begin
+            prod_ll_q <= prod_ll;
+            prod_hl_q <= prod_hl;
+            prod_lh_q <= prod_lh;
+            prod_hh_q <= prod_hh;
+          end
+        end
+
+        // Stage 3: Partial Product Addition
+        wire signed [(AW+1)+(BW+1)-1:0] mid_sum = $signed({{((AW+BW+2)-(AW+1)){prod_hl_q[AW]}}, prod_hl_q}) +
+                                                  $signed({{((AW+BW+2)-(BW+1)){prod_lh_q[BW]}}, prod_lh_q});
+        wire signed [(AW+1)+(BW+1)-1:0] full_sum = { {((AW+BW+2)-64){1'b0}}, prod_ll_q } +
+                                                   (mid_sum <<< 32) +
+                                                   (prod_hh_q <<< 64);
+
+        reg [AW+BW-1:0] p_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        always @(posedge clk) begin
+          if (en) begin
+            p_q <= full_sum[AW+BW-1:0];
+          end
+        end
+
+        assign p = p_q;
+
       end else begin : gen_kintex7_dsp_wide
         (* use_dsp = "yes" *)
         wire signed [AW:0] ext_a = SIGNED ? {a[AW-1], a} : {1'b0, a};
@@ -123,19 +181,24 @@ module sk_mul #(
         end else begin : gen_lat3
           reg [AW-1:0]    a_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
           reg [BW-1:0]    b_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+          always @(posedge clk) begin
+            if (en) begin
+              a_reg <= a;
+              b_reg <= b;
+            end
+          end
           wire signed [AW:0] ext_a_reg = SIGNED ? {a_reg[AW-1], a_reg} : {1'b0, a_reg};
           wire signed [BW:0] ext_b_reg = SIGNED ? {b_reg[BW-1], b_reg} : {1'b0, b_reg};
           wire signed [(AW+1)+(BW+1)-1:0] full_prod_reg = ext_a_reg * ext_b_reg;
-          reg [AW+BW-1:0] m_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-          reg [AW+BW-1:0] p_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+          reg [AW+BW-1:0] r1; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+          reg [AW+BW-1:0] r2; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
           always @(posedge clk) begin
             if (en) begin
-              a_reg <= a; b_reg <= b;
-              m_reg <= full_prod_reg[AW+BW-1:0];
-              p_reg <= m_reg;
+              r1 <= full_prod_reg[AW+BW-1:0];
+              r2 <= r1;
             end
           end
-          assign p = p_reg;
+          assign p = r2;
         end
       end
       `else
@@ -152,28 +215,41 @@ module sk_mul #(
         always @(posedge clk) if (en) r1 <= full_prod[AW+BW-1:0];
         assign p = r1;
       end else if (LAT == 2) begin : gen_lat2
-        reg [AW+BW-1:0] r1; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-        reg [AW+BW-1:0] r2; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-        always @(posedge clk) begin
-          if (en) begin r1 <= full_prod[AW+BW-1:0]; r2 <= r1; end
-        end
-        assign p = r2;
-      end else begin : gen_lat3
         reg [AW-1:0]    a_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
         reg [BW-1:0]    b_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
         wire signed [AW:0] ext_a_reg = SIGNED ? {a_reg[AW-1], a_reg} : {1'b0, a_reg};
         wire signed [BW:0] ext_b_reg = SIGNED ? {b_reg[BW-1], b_reg} : {1'b0, b_reg};
         wire signed [(AW+1)+(BW+1)-1:0] full_prod_reg = ext_a_reg * ext_b_reg;
-        reg [AW+BW-1:0] m_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
         reg [AW+BW-1:0] p_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
         always @(posedge clk) begin
           if (en) begin
-            a_reg <= a; b_reg <= b;
-            m_reg <= full_prod_reg[AW+BW-1:0];
-            p_reg <= m_reg;
+            a_reg <= a;
+            b_reg <= b;
+            p_reg <= full_prod_reg[AW+BW-1:0];
           end
         end
         assign p = p_reg;
+      end else begin : gen_lat3
+        reg [AW-1:0]    a_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg [BW-1:0]    b_reg; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        always @(posedge clk) begin
+          if (en) begin
+            a_reg <= a;
+            b_reg <= b;
+          end
+        end
+        wire signed [AW:0] ext_a_reg = SIGNED ? {a_reg[AW-1], a_reg} : {1'b0, a_reg};
+        wire signed [BW:0] ext_b_reg = SIGNED ? {b_reg[BW-1], b_reg} : {1'b0, b_reg};
+        wire signed [(AW+1)+(BW+1)-1:0] full_prod_reg = ext_a_reg * ext_b_reg;
+        reg [AW+BW-1:0] r1; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg [AW+BW-1:0] r2; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        always @(posedge clk) begin
+          if (en) begin
+            r1 <= full_prod_reg[AW+BW-1:0];
+            r2 <= r1;
+          end
+        end
+        assign p = r2;
       end
       `endif
 

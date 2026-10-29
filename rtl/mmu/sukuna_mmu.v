@@ -132,9 +132,9 @@ module sukuna_mmu #(
   reg                    arb_busy_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   wire                   l2_tlb_req_ready;
-  reg                    l2_tlb_req_valid;
-  reg [1:0]              l2_tlb_req_hart_id;
-  reg [VADDR_WIDTH-1:0]  l2_tlb_req_vaddr;
+  reg                    l2_tlb_req_valid_q;
+  reg [1:0]              l2_tlb_req_hart_id_q;
+  reg [VADDR_WIDTH-1:0]  l2_tlb_req_vaddr_q;
 
   // Simple round-robin selection
   wire [5:0] req_vec = {refill_req[5], refill_req[4], refill_req[3],
@@ -146,18 +146,6 @@ module sukuna_mmu #(
     next_grant = arb_winner_q;
     for (c = 0; c < 6; c = c + 1) begin
       if (req_vec[c]) next_grant = c[2:0];
-    end
-  end
-
-  always @(*) begin
-    l2_tlb_req_valid   = 1'b0;
-    l2_tlb_req_hart_id = 2'd0;
-    l2_tlb_req_vaddr   = {VADDR_WIDTH{1'b0}};
-
-    if (!arb_busy_q && (|req_vec)) begin
-      l2_tlb_req_valid   = 1'b1;
-      l2_tlb_req_hart_id = next_grant[2:0] >= 3'd3 ? (next_grant[1:0] - 2'd3) : next_grant[1:0];
-      l2_tlb_req_vaddr   = {refill_vaddr_w[next_grant], 2'b00};
     end
   end
 
@@ -186,9 +174,9 @@ module sukuna_mmu #(
   ) u_l2_tlb (
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
-    .req_valid_i        (l2_tlb_req_valid),
-    .req_hart_id_i      (l2_tlb_req_hart_id),
-    .req_vaddr_i        (l2_tlb_req_vaddr),
+    .req_valid_i        (l2_tlb_req_valid_q),
+    .req_hart_id_i      (l2_tlb_req_hart_id_q),
+    .req_vaddr_i        (l2_tlb_req_vaddr_q),
     .req_ready_o        (l2_tlb_req_ready),
     .resp_valid_o       (l2_resp_valid),
     .resp_hart_id_o     (l2_resp_hart_id),
@@ -253,14 +241,23 @@ module sukuna_mmu #(
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      arb_winner_q <= 3'd0;
-      arb_busy_q   <= 1'b0;
+      arb_winner_q         <= 3'd0;
+      arb_busy_q           <= 1'b0;
+      l2_tlb_req_valid_q   <= 1'b0;
+      l2_tlb_req_hart_id_q <= 2'd0;
+      l2_tlb_req_vaddr_q   <= {VADDR_WIDTH{1'b0}};
     end else begin
-      if (l2_tlb_req_valid && l2_tlb_req_ready) begin
-        arb_winner_q <= next_grant;
-        arb_busy_q   <= 1'b1;
-      end else if (l2_resp_valid) begin
-        arb_busy_q   <= 1'b0;
+      if (!arb_busy_q && (|req_vec)) begin
+        arb_winner_q         <= next_grant;
+        arb_busy_q           <= 1'b1;
+        l2_tlb_req_valid_q   <= 1'b1;
+        l2_tlb_req_hart_id_q <= next_grant[2:0] >= 3'd3 ? (next_grant[1:0] - 2'd3) : next_grant[1:0];
+        l2_tlb_req_vaddr_q   <= {refill_vaddr_w[next_grant], 2'b00};
+      end else begin
+        l2_tlb_req_valid_q   <= 1'b0;
+        if (arb_busy_q && l2_resp_valid) begin
+          arb_busy_q <= 1'b0;
+        end
       end
     end
   end

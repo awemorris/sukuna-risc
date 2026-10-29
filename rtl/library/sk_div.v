@@ -1,8 +1,8 @@
 // ============================================================================
-// Sukuna-RISC: sk_div Divider Primitive (Verilog 2005)
+// Sukuna-RISC: sk_div Multi-cycle Restoring Divider (Verilog 2005)
 // Complies with design-rule.md
-// Parameters:
-//   - IMPL: "CARRY" (default: subtractor via carry chain), "LOGIC" (LUT), "DSP"
+// Performs 64-bit integer division iteratively in 64 clock cycles.
+// Features 1-cycle early termination for division by zero and overflow.
 // ============================================================================
 
 `include "sukuna_defines.vh"
@@ -13,6 +13,7 @@ module sk_div #(
 )(
   input  wire             clk_i,
   input  wire             rst_ni,
+  input  wire             flush_i,
 
   input  wire             start_i,
   input  wire             signed_mode_i,
@@ -26,119 +27,106 @@ module sk_div #(
   output wire             div_by_zero_o
 );
 
+  localparam S_IDLE = 2'b00;
+  localparam S_CALC = 2'b01;
+  localparam S_DONE = 2'b10;
+
+  reg [1:0] state_q;
+
   assign div_by_zero_o = (divisor_i == {WIDTH{1'b0}});
 
-  wire signed [WIDTH-1:0] s_dividend = dividend_i;
-  wire signed [WIDTH-1:0] s_divisor  = divisor_i;
   wire is_overflow = signed_mode_i && (dividend_i == {1'b1, {(WIDTH-1){1'b0}}}) && (divisor_i == {WIDTH{1'b1}});
 
-  reg [WIDTH-1:0] div_res;
-  reg [WIDTH-1:0] rem_res;
-  always @(*) begin
-    if (div_by_zero_o) begin
-      div_res = {WIDTH{1'b1}};
-      rem_res = dividend_i;
-    end else if (is_overflow) begin
-      div_res = dividend_i;
-      rem_res = {WIDTH{1'b0}};
-    end else if (signed_mode_i) begin
-      div_res = s_dividend / s_divisor;
-      rem_res = s_dividend % s_divisor;
+  // Internal registers for multi-cycle iteration
+  reg [WIDTH-1:0]   acc_q;
+  reg [WIDTH-1:0]   quo_q;
+  reg [WIDTH-1:0]   div_q;
+  reg [5:0]         cnt_q;
+  reg               neg_quo_q;
+  reg               neg_rem_q;
+
+  // Next-step trial subtraction (single 64-bit adder, ~0.8 ns)
+  wire [WIDTH:0] next_acc_trial = {acc_q[WIDTH-2:0], quo_q[WIDTH-1]};
+  wire [WIDTH:0] sub_res = next_acc_trial - {1'b0, div_q};
+  wire           sub_ok  = ~sub_res[WIDTH];
+
+  wire [WIDTH-1:0] abs_dividend = (signed_mode_i && dividend_i[WIDTH-1]) ? -dividend_i : dividend_i;
+  wire [WIDTH-1:0] abs_divisor  = (signed_mode_i && divisor_i[WIDTH-1])  ? -divisor_i  : divisor_i;
+
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      state_q     <= S_IDLE;
+      ready_o     <= 1'b1;
+      done_o      <= 1'b0;
+      quotient_o  <= {WIDTH{1'b0}};
+      remainder_o <= {WIDTH{1'b0}};
+      acc_q       <= {WIDTH{1'b0}};
+      quo_q       <= {WIDTH{1'b0}};
+      div_q       <= {WIDTH{1'b0}};
+      cnt_q       <= 6'd0;
+      neg_quo_q   <= 1'b0;
+      neg_rem_q   <= 1'b0;
+    end else if (flush_i) begin
+      state_q     <= S_IDLE;
+      ready_o     <= 1'b1;
+      done_o      <= 1'b0;
     end else begin
-      div_res = dividend_i / divisor_i;
-      rem_res = dividend_i % divisor_i;
+      done_o <= 1'b0;
+
+      case (state_q)
+        S_IDLE: begin
+          ready_o <= 1'b1;
+          if (start_i && ready_o) begin
+            ready_o <= 1'b0;
+            if (div_by_zero_o) begin
+              quotient_o  <= {WIDTH{1'b1}};
+              remainder_o <= dividend_i;
+              done_o      <= 1'b1;
+              state_q     <= S_IDLE;
+            end else if (is_overflow) begin
+              quotient_o  <= dividend_i;
+              remainder_o <= {WIDTH{1'b0}};
+              done_o      <= 1'b1;
+              state_q     <= S_IDLE;
+            end else begin
+              neg_quo_q <= signed_mode_i && (dividend_i[WIDTH-1] ^ divisor_i[WIDTH-1]);
+              neg_rem_q <= signed_mode_i && dividend_i[WIDTH-1];
+              acc_q     <= {WIDTH{1'b0}};
+              quo_q     <= abs_dividend;
+              div_q     <= abs_divisor;
+              cnt_q     <= 6'd63;
+              state_q   <= S_CALC;
+            end
+          end
+        end
+
+        S_CALC: begin
+          if (sub_ok) begin
+            acc_q <= sub_res[WIDTH-1:0];
+            quo_q <= {quo_q[WIDTH-2:0], 1'b1};
+          end else begin
+            acc_q <= next_acc_trial[WIDTH-1:0];
+            quo_q <= {quo_q[WIDTH-2:0], 1'b0};
+          end
+
+          if (cnt_q == 6'd0) begin
+            state_q <= S_DONE;
+          end else begin
+            cnt_q <= cnt_q - 6'd1;
+          end
+        end
+
+        S_DONE: begin
+          quotient_o  <= neg_quo_q ? -quo_q : quo_q;
+          remainder_o <= neg_rem_q ? -acc_q : acc_q;
+          done_o      <= 1'b1;
+          ready_o     <= 1'b1;
+          state_q     <= S_IDLE;
+        end
+
+        default: state_q <= S_IDLE;
+      endcase
     end
   end
-
-  // Multi-cycle iterative divider state machine
-  reg [5:0]       count_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg             busy_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-
-  generate
-    if (IMPL == "DSP") begin : gen_dsp_div
-      always @(posedge clk_i or negedge rst_ni) begin
-        if (!rst_ni) begin
-          ready_o     <= 1'b1;
-          done_o      <= 1'b0;
-          quotient_o  <= {WIDTH{1'b0}};
-          remainder_o <= {WIDTH{1'b0}};
-          count_q     <= 6'd0;
-          busy_q      <= 1'b0;
-        end else begin
-          done_o <= 1'b0;
-          if (start_i && ready_o) begin
-            ready_o     <= 1'b0;
-            busy_q      <= 1'b1;
-            count_q     <= 6'd4;
-            quotient_o  <= div_res;
-            remainder_o <= rem_res;
-          end else if (busy_q) begin
-            if (count_q == 6'd1) begin
-              busy_q  <= 1'b0;
-              ready_o <= 1'b1;
-              done_o  <= 1'b1;
-            end
-            count_q <= count_q - 6'd1;
-          end
-        end
-      end
-
-    end else if (IMPL == "CARRY") begin : gen_carry_div
-      always @(posedge clk_i or negedge rst_ni) begin
-        if (!rst_ni) begin
-          ready_o     <= 1'b1;
-          done_o      <= 1'b0;
-          quotient_o  <= {WIDTH{1'b0}};
-          remainder_o <= {WIDTH{1'b0}};
-          count_q     <= 6'd0;
-          busy_q      <= 1'b0;
-        end else begin
-          done_o <= 1'b0;
-          if (start_i && ready_o) begin
-            ready_o     <= 1'b0;
-            busy_q      <= 1'b1;
-            count_q     <= 6'd4;
-            quotient_o  <= div_res;
-            remainder_o <= rem_res;
-          end else if (busy_q) begin
-            if (count_q == 6'd1) begin
-              busy_q  <= 1'b0;
-              ready_o <= 1'b1;
-              done_o  <= 1'b1;
-            end
-            count_q <= count_q - 6'd1;
-          end
-        end
-      end
-
-    end else begin : gen_logic_div
-      always @(posedge clk_i or negedge rst_ni) begin
-        if (!rst_ni) begin
-          ready_o     <= 1'b1;
-          done_o      <= 1'b0;
-          quotient_o  <= {WIDTH{1'b0}};
-          remainder_o <= {WIDTH{1'b0}};
-          count_q     <= 6'd0;
-          busy_q      <= 1'b0;
-        end else begin
-          done_o <= 1'b0;
-          if (start_i && ready_o) begin
-            ready_o     <= 1'b0;
-            busy_q      <= 1'b1;
-            count_q     <= 6'd4;
-            quotient_o  <= div_res;
-            remainder_o <= rem_res;
-          end else if (busy_q) begin
-            if (count_q == 6'd1) begin
-              busy_q  <= 1'b0;
-              ready_o <= 1'b1;
-              done_o  <= 1'b1;
-            end
-            count_q <= count_q - 6'd1;
-          end
-        end
-      end
-    end
-  endgenerate
 
 endmodule

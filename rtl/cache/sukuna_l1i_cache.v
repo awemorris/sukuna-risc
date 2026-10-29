@@ -168,31 +168,23 @@ module sukuna_l1i_cache #(
   // --------------------------------------------------------------------------
   wire hit = |way_hit;
 
-  reg [CACHE_LINE_BITS-1:0] hit_line_data;
-  integer k;
-  always @(*) begin
-    hit_line_data = data_rdata[0];
-    for (k = 0; k < WAYS; k = k + 1) begin
-      if (way_hit[k]) hit_line_data = data_rdata[k];
-    end
-  end
-
-  wire [CACHE_LINE_BITS-1:0] eff_line_data = refill_resp_valid_i ? refill_line_data_i :
-                                             hit_line_data;
-
-  // Extract 64-bit instruction block (inst0, inst1) based on 32-bit word offset [5:2]
-  wire [31:0] line_words32 [0:15];
-  genvar wi;
+  wire [63:0] way_fetch64 [0:WAYS-1];
+  genvar iway;
   generate
-    for (wi = 0; wi < 16; wi = wi + 1) begin : gen_words32
-      assign line_words32[wi] = eff_line_data[wi*32 +: 32];
+    for (iway = 0; iway < WAYS; iway = iway + 1) begin : gen_way_fetch64
+      assign way_fetch64[iway] = data_rdata[iway][req_offset_q[3:1]*64 +: 64];
     end
   endgenerate
 
-  wire [31:0] fetch_word0 = line_words32[req_offset_q];
-  wire [31:0] fetch_word1 = (req_offset_q == 4'd15) ? 32'h00000013 : line_words32[req_offset_q + 4'd1];
+  wire [63:0] hit_fetch64 = ({64{way_hit[0]}} & way_fetch64[0]) |
+                            ({64{way_hit[1]}} & way_fetch64[1]) |
+                            ({64{way_hit[2]}} & way_fetch64[2]) |
+                            ({64{way_hit[3]}} & way_fetch64[3]);
 
-  assign fetch_inst_o       = {fetch_word1, fetch_word0};
+  wire [63:0] refill_fetch64 = refill_line_data_i[req_offset_q[3:1]*64 +: 64];
+  wire [63:0] eff_fetch64    = refill_resp_valid_i ? refill_fetch64 : hit_fetch64;
+
+  assign fetch_inst_o       = eff_fetch64;
   assign fetch_resp_valid_o = (hit && !miss_busy_q) || refill_resp_valid_i;
   assign fetch_miss_o       = ((req_valid_q && !hit) || miss_busy_q) && !refill_resp_valid_i;
 
