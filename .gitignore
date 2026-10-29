@@ -4,3 +4,4 @@ build/
 *.jou
 a.out
 .Xil
+syn/
