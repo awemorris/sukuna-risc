@@ -50,12 +50,18 @@ module sukuna_l2_arbiter #(
   input  wire [CACHE_LINE_BITS-1:0]         l2_resp_rdata_i
 );
 
+  genvar h;
+  generate
+    for (h = 0; h < NUM_HARTS; h = h + 1) begin : gen_hart_resp
+      assign l1i_resp_valid_o[h] = l2_resp_valid_i && (l2_resp_source_i == h[3:0]);
+      assign l1d_resp_valid_o[h] = l2_resp_valid_i && (l2_resp_source_i == (4'd3 + h[3:0]));
+    end
+  endgenerate
+
   assign l1i_req_ready_o    = {NUM_HARTS{l2_req_ready_i}};
-  assign l1i_resp_valid_o   = {NUM_HARTS{l2_resp_valid_i && (l2_resp_source_i < 3)}};
   assign l1i_line_data_o    = {NUM_HARTS{l2_resp_rdata_i}};
 
   assign l1d_req_ready_o    = {NUM_HARTS{l2_req_ready_i}};
-  assign l1d_resp_valid_o   = {NUM_HARTS{l2_resp_valid_i && (l2_resp_source_i >= 3 && l2_resp_source_i < 6)}};
   assign l1d_rline_data_o   = {NUM_HARTS{l2_resp_rdata_i}};
 
   assign ptw_req_ready_o    = l2_req_ready_i;
@@ -73,16 +79,36 @@ module sukuna_l2_arbiter #(
       l2_req_valid_o   = 1'b1;
       l2_req_source_o  = 4'd6;
       l2_req_paddr_w_o = ptw_paddr_w_i;
-    end else if (|l1d_req_valid_i) begin
+    end else if (l1d_req_valid_i[0]) begin
       l2_req_valid_o   = 1'b1;
       l2_req_write_o   = l1d_req_write_i[0];
       l2_req_source_o  = 4'd3;
-      l2_req_paddr_w_o = l1d_line_paddr_w_i[PADDR_WIDTH-3:0];
-      l2_req_wdata_o   = l1d_wline_data_i[CACHE_LINE_BITS-1:0];
-    end else if (|l1i_req_valid_i) begin
+      l2_req_paddr_w_o = l1d_line_paddr_w_i[0*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)];
+      l2_req_wdata_o   = l1d_wline_data_i[0*CACHE_LINE_BITS +: CACHE_LINE_BITS];
+    end else if (NUM_HARTS > 1 && l1d_req_valid_i[1]) begin
+      l2_req_valid_o   = 1'b1;
+      l2_req_write_o   = l1d_req_write_i[1];
+      l2_req_source_o  = 4'd4;
+      l2_req_paddr_w_o = l1d_line_paddr_w_i[1*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)];
+      l2_req_wdata_o   = l1d_wline_data_i[1*CACHE_LINE_BITS +: CACHE_LINE_BITS];
+    end else if (NUM_HARTS > 2 && l1d_req_valid_i[2]) begin
+      l2_req_valid_o   = 1'b1;
+      l2_req_write_o   = l1d_req_write_i[2];
+      l2_req_source_o  = 4'd5;
+      l2_req_paddr_w_o = l1d_line_paddr_w_i[2*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)];
+      l2_req_wdata_o   = l1d_wline_data_i[2*CACHE_LINE_BITS +: CACHE_LINE_BITS];
+    end else if (l1i_req_valid_i[0]) begin
       l2_req_valid_o   = 1'b1;
       l2_req_source_o  = 4'd0;
-      l2_req_paddr_w_o = l1i_line_paddr_w_i[PADDR_WIDTH-3:0];
+      l2_req_paddr_w_o = l1i_line_paddr_w_i[0*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)];
+    end else if (NUM_HARTS > 1 && l1i_req_valid_i[1]) begin
+      l2_req_valid_o   = 1'b1;
+      l2_req_source_o  = 4'd1;
+      l2_req_paddr_w_o = l1i_line_paddr_w_i[1*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)];
+    end else if (NUM_HARTS > 2 && l1i_req_valid_i[2]) begin
+      l2_req_valid_o   = 1'b1;
+      l2_req_source_o  = 4'd2;
+      l2_req_paddr_w_o = l1i_line_paddr_w_i[2*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)];
     end
   end
 

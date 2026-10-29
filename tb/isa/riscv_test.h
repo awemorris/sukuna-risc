@@ -5,7 +5,14 @@
   .section .text.init;    \
   .align  4;              \
   .globl _start;          \
-_start:
+_start:                   \
+  csrr  t6, mhartid;      \
+  bnez  t6, 99f;          \
+  j     98f;              \
+99:                       \
+  wfi;                    \
+  j     99b;              \
+98:
 
 #define RVTEST_PASS       \
   li  a0, 0;              \

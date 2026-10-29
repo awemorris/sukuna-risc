@@ -89,7 +89,7 @@ module sukuna_l2_cache #(
   reg [SETS-1:0] way_dirty_q [0:WAYS-1];
   integer wy;
 
-  wire is_busy = (state_q != S_IDLE);
+  wire is_busy;
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -179,6 +179,8 @@ module sukuna_l2_cache #(
     end
   end
 
+  wire will_miss = (state_q == S_IDLE) && req_valid_q && !hit;
+  assign is_busy = (state_q != S_IDLE) || will_miss;
   assign req_ready_o = !is_busy;
 
   // --------------------------------------------------------------------------

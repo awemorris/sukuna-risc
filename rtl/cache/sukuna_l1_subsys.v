@@ -87,6 +87,7 @@ module sukuna_l1_subsys #(
   generate
     for (h = 0; h < NUM_HARTS; h = h + 1) begin : gen_l1_caches
       sukuna_l1i_cache #(
+        .HART_ID        (h),
         .PADDR_WIDTH    (PADDR_WIDTH),
         .CACHE_LINE_BITS(CACHE_LINE_BITS),
         .WAYS           (L1I_WAYS)

@@ -146,7 +146,7 @@ module sukuna_thread_pipe #(
   wire [4:0]      id1_rs2_0, id1_rs2_1;
   wire [XLEN-1:0] id1_imm0, id1_imm1;
   wire [4:0]      id1_alu_op0, id1_alu_op1;
-  wire [3:0]      id1_mem_op0, id1_mem_op1;
+  wire [7:0]      id1_mem_op0, id1_mem_op1;
   wire [2:0]      id1_sys_op0;
   wire [2:0]      id1_priv_op0;
   wire [11:0]     id1_csr_addr0;
@@ -167,7 +167,7 @@ module sukuna_thread_pipe #(
   wire [4:0]      id2_rs2_0, id2_rs2_1;
   wire [XLEN-1:0] id2_imm0, id2_imm1;
   wire [4:0]      id2_alu_op0, id2_alu_op1;
-  wire [3:0]      id2_mem_op0, id2_mem_op1;
+  wire [7:0]      id2_mem_op0, id2_mem_op1;
   wire [2:0]      id2_sys_op0;
   wire [2:0]      id2_priv_op0;
   wire [11:0]     id2_csr_addr0;
@@ -190,7 +190,7 @@ module sukuna_thread_pipe #(
   wire [XLEN-1:0] ex_l0_src2, ex_l1_src2;
   wire [XLEN-1:0] ex_l0_imm, ex_l1_imm;
   wire [4:0]      ex_l0_alu_op, ex_l1_alu_op;
-  wire [3:0]      ex_l0_mem_op, ex_l1_mem_op;
+  wire [7:0]      ex_l0_mem_op, ex_l1_mem_op;
   wire [2:0]      ex_l0_sys_op;
   wire [2:0]      ex_l0_priv_op;
   wire [11:0]     ex_l0_csr_addr;
@@ -248,6 +248,10 @@ module sukuna_thread_pipe #(
   wire [XLEN-1:0] branch_target;
   wire [XLEN-1:0] if1_redirect_pc = trap_flush ? trap_target_pc : branch_target;
 
+  // Inter-stage Fetch Request (IF2 -> IF1)
+  wire            fetch_req_valid;
+  wire [XLEN-1:0] fetch_req_pc;
+
   // --------------------------------------------------------------------------
   // Stage 1: IF1
   // --------------------------------------------------------------------------
@@ -260,33 +264,33 @@ module sukuna_thread_pipe #(
   ) u_if1 (
     .clk_i            (clk_i),
     .rst_ni           (rst_ni),
-    .stall_i          (stall_if1 || wfi_sleep),
     .flush_i          (flush_if1),
-    .redirect_pc_i    (if1_redirect_pc),
-    .fetch_step_i     (fetch_step),
+    .fetch_req_valid_i(fetch_req_valid && !wfi_sleep),
+    .fetch_req_pc_i   (fetch_req_pc),
     .itlb_req_valid_o (itlb_req_valid_o),
     .itlb_vaddr_w_o   (itlb_vaddr_w_o),
     .itlb_hit_i       (itlb_hit_i),
     .itlb_paddr_w_i   (itlb_paddr_w_i),
     .itlb_fault_i     (itlb_fault_i),
     .l1i_req_valid_o  (l1i_req_valid_o),
-    .l1i_paddr_w_o    (l1i_paddr_w_o),
-    .if1_valid_o      (if1_valid),
-    .if1_pc_o         (if1_pc)
+    .l1i_paddr_w_o    (l1i_paddr_w_o)
   );
 
   // --------------------------------------------------------------------------
   // Stage 2: IF2
   // --------------------------------------------------------------------------
   sukuna_stage_if2 #(
-    .XLEN(XLEN)
+    .HART_ID (HART_ID),
+    .XLEN    (XLEN),
+    .RESET_PC(RESET_PC)
   ) u_if2 (
     .clk_i            (clk_i),
     .rst_ni           (rst_ni),
     .stall_i          (stall_if2),
     .flush_i          (flush_if2),
-    .if1_valid_i      (if1_valid),
-    .if1_pc_i         (if1_pc),
+    .redirect_pc_i    (if1_redirect_pc),
+    .fetch_req_valid_o(fetch_req_valid),
+    .fetch_req_pc_o   (fetch_req_pc),
     .l1i_resp_valid_i (l1i_resp_valid_i),
     .l1i_inst_i       (l1i_inst_i),
     .l1i_miss_i       (l1i_miss_i),

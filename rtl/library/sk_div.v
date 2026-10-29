@@ -32,14 +32,23 @@ module sk_div #(
   wire signed [WIDTH-1:0] s_divisor  = divisor_i;
   wire is_overflow = signed_mode_i && (dividend_i == {1'b1, {(WIDTH-1){1'b0}}}) && (divisor_i == {WIDTH{1'b1}});
 
-  wire [WIDTH-1:0] div_res = div_by_zero_o ? {WIDTH{1'b1}} :
-                             is_overflow   ? dividend_i :
-                             signed_mode_i ? (s_dividend / s_divisor) :
-                                             (dividend_i / divisor_i);
-  wire [WIDTH-1:0] rem_res = div_by_zero_o ? dividend_i :
-                             is_overflow   ? {WIDTH{1'b0}} :
-                             signed_mode_i ? (s_dividend % s_divisor) :
-                                             (dividend_i % divisor_i);
+  reg [WIDTH-1:0] div_res;
+  reg [WIDTH-1:0] rem_res;
+  always @(*) begin
+    if (div_by_zero_o) begin
+      div_res = {WIDTH{1'b1}};
+      rem_res = dividend_i;
+    end else if (is_overflow) begin
+      div_res = dividend_i;
+      rem_res = {WIDTH{1'b0}};
+    end else if (signed_mode_i) begin
+      div_res = s_dividend / s_divisor;
+      rem_res = s_dividend % s_divisor;
+    end else begin
+      div_res = dividend_i / divisor_i;
+      rem_res = dividend_i % divisor_i;
+    end
+  end
 
   // Multi-cycle iterative divider state machine
   reg [5:0]       count_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */

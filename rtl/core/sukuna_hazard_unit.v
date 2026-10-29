@@ -53,7 +53,8 @@ module sukuna_hazard_unit (
   // Global Stall: EX memory stall or Shared EU wait freezes all upstream stages
   wire upstream_freeze = ex_stall_i || shared_eu_stall_i;
 
-  assign stall_l1i_o = upstream_freeze;
+  // L1I is decoupled via IF2 fetch queue; only halt on WFI in thread pipe
+  assign stall_l1i_o = 1'b0;
   assign stall_if1_o = upstream_freeze || l1i_miss_i;
   assign stall_if2_o = upstream_freeze;
   assign stall_id1_o = upstream_freeze;

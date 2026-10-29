@@ -60,10 +60,11 @@ def run_test(test_s, extra_cflags="", max_cycles=20000):
 def main():
     os.makedirs(BUILD_DIR, exist_ok=True)
     
-    # Check testbench binary
-    if not os.path.exists(TB_EXEC):
-        print(f"Testbench binary {TB_EXEC} not found. Running 'make sim-build'...")
-        subprocess.run("make sim-build", shell=True, check=True)
+    # Always ensure testbench binary is up to date
+    res = subprocess.run("make sim-build", shell=True, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"Build error:\n{res.stderr}")
+        sys.exit(1)
 
     tests = sys.argv[1:] if len(sys.argv) > 1 else sorted(glob.glob(f"{ISA_DIR}/*.S"))
     if not tests:

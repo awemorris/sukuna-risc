@@ -36,7 +36,7 @@ module sukuna_stage_ex #(
   input  wire [XLEN-1:0]        l0_src2_i,
   input  wire [XLEN-1:0]        l0_imm_i,
   input  wire [4:0]             l0_alu_op_i,
-  input  wire [3:0]             l0_mem_op_i,
+  input  wire [7:0]             l0_mem_op_i,
   input  wire [2:0]             l0_sys_op_i,
   input  wire [2:0]             l0_priv_op_i,
   input  wire [11:0]            l0_csr_addr_i,
@@ -55,7 +55,7 @@ module sukuna_stage_ex #(
   input  wire [XLEN-1:0]        l1_src2_i,
   input  wire [XLEN-1:0]        l1_imm_i,
   input  wire [4:0]             l1_alu_op_i,
-  input  wire [3:0]             l1_mem_op_i,
+  input  wire [7:0]             l1_mem_op_i,
   input  wire                   l1_is_word_i,
   input  wire                   l1_use_imm_i,
 
@@ -307,7 +307,7 @@ module sukuna_stage_ex #(
   // MA-EU Selection
   // --------------------------------------------------------------------------
   wire ma_valid = (ma_en_l0_i && l0_valid_i) || (ma_en_l1_i && l1_valid_i && !branch_mispredict_o);
-  wire [3:0]      ma_op     = ma_en_l0_i ? l0_mem_op_i : l1_mem_op_i;
+  wire [7:0]      ma_op     = ma_en_l0_i ? l0_mem_op_i : l1_mem_op_i;
   wire [4:0]      ma_rd     = ma_en_l0_i ? l0_rd_i     : l1_rd_i;
   wire [XLEN-1:0] ma_base   = ma_en_l0_i ? fwd_l0_src1 : fwd_l1_src1;
   wire [XLEN-1:0] ma_offset = ma_en_l0_i ? l0_imm_i    : l1_imm_i;
@@ -332,6 +332,8 @@ module sukuna_stage_ex #(
     .req_offset_i       (ma_offset),
     .req_wdata_i        (ma_wdata),
     .busy_o             (ma_busy),
+    .snoop_inv_valid_i  (1'b0),
+    .snoop_inv_paddr_w_i({(PADDR_WIDTH-2){1'b0}}),
     .dtlb_lookup_valid_o(dtlb_lookup_valid_o),
     .dtlb_vaddr_w_o     (dtlb_vaddr_w_o),
     .dtlb_hit_i         (dtlb_hit_i),
