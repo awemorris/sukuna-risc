@@ -99,17 +99,17 @@ module sukuna_agu_eu #(
   reg [2:0]               s1_addr_lsb_q;/* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]          s1_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  assign busy_o = ((req_valid_i || s1_valid_q) && !l1d_resp_valid_i) || l1d_miss_stall_i;
+  assign busy_o = (s1_valid_q && !l1d_resp_valid_i) || l1d_miss_stall_i;
 
-  assign dtlb_lookup_valid_o = req_valid_i || s1_valid_q;
-  assign dtlb_vaddr_w_o      = s1_valid_q ? s1_vaddr_w_q : calc_vaddr[VADDR_WIDTH-1:2];
+  assign dtlb_lookup_valid_o = s1_valid_q;
+  assign dtlb_vaddr_w_o      = s1_vaddr_w_q;
 
-  assign l1d_req_valid_o     = (req_valid_i || s1_valid_q) && dtlb_hit_i && !l1d_resp_valid_i;
-  assign l1d_req_write_o     = s1_valid_q ? s1_op_q[3] : req_op_i[3]; // Bit 3 indicates store write
-  assign l1d_req_op_o        = s1_valid_q ? s1_op_q : req_op_i;
-  assign l1d_req_byte_en_o   = s1_valid_q ? s1_byte_en_q : calc_byte_en;
+  assign l1d_req_valid_o     = s1_valid_q && dtlb_hit_i && !l1d_resp_valid_i;
+  assign l1d_req_write_o     = s1_op_q[3]; // Bit 3 indicates store write
+  assign l1d_req_op_o        = s1_op_q;
+  assign l1d_req_byte_en_o   = s1_byte_en_q;
   assign l1d_paddr_w_o       = dtlb_paddr_w_i;
-  assign l1d_wdata_o         = s1_valid_q ? s1_wdata_q : aligned_wdata;
+  assign l1d_wdata_o         = s1_wdata_q;
 
   // Pipeline Stage 1
   always @(posedge clk_i or negedge rst_ni) begin
@@ -122,10 +122,18 @@ module sukuna_agu_eu #(
       s1_addr_lsb_q <= 3'd0;
       s1_wdata_q    <= {XLEN{1'b0}};
     end else begin
-      if (l1d_resp_valid_i) begin
-        s1_valid_q <= 1'b0;
-      end else if (req_valid_i) begin
-        s1_valid_q    <= 1'b1;
+      if (s1_valid_q) begin
+        if (l1d_resp_valid_i) begin
+          s1_valid_q    <= req_valid_i;
+          s1_op_q       <= req_op_i;
+          s1_byte_en_q  <= calc_byte_en;
+          s1_rd_q       <= req_rd_i;
+          s1_vaddr_w_q  <= calc_vaddr[VADDR_WIDTH-1:2];
+          s1_addr_lsb_q <= calc_vaddr[2:0];
+          s1_wdata_q    <= aligned_wdata;
+        end
+      end else begin
+        s1_valid_q    <= req_valid_i;
         s1_op_q       <= req_op_i;
         s1_byte_en_q  <= calc_byte_en;
         s1_rd_q       <= req_rd_i;

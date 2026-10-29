@@ -228,7 +228,7 @@ module sukuna_l1i_cache #(
         for (wy = 0; wy < WAYS; wy = wy + 1) begin
           way_valid_q[wy] <= {SETS{1'b0}};
         end
-      end else if (refill_req_valid_o) begin
+      end else if (refill_req_valid_o && refill_req_ready_i) begin
         miss_busy_q <= 1'b1;
       end else if (refill_resp_valid_i) begin
         miss_busy_q                       <= 1'b0;

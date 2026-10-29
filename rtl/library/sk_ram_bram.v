@@ -52,14 +52,17 @@ module sk_ram_bram #(
   end
 
   // Synchronous Write
+  reg [DATA_WIDTH-1:0] mem_next;
   always @(posedge clk_i) begin
     if (wen_i) begin
       if (BYTE_WRITE_EN) begin
+        mem_next = mem[waddr_i];
         for (i = 0; i < WE_WIDTH; i = i + 1) begin
           if (wstrb_i[i]) begin
-            mem[waddr_i][i*8 +: 8] <= wdata_i[i*8 +: 8];
+            mem_next[i*8 +: 8] = wdata_i[i*8 +: 8];
           end
         end
+        mem[waddr_i] <= mem_next;
       end else begin
         mem[waddr_i] <= wdata_i;
       end

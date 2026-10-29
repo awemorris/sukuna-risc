@@ -106,6 +106,8 @@ module sukuna_l2_cache #(
       req_tag_q     <= req_tag;
       req_paddr_w_q <= req_paddr_w_i;
       req_wdata_q   <= req_wdata_i;
+    end else if (state_q == S_REFILL && mem_resp_valid_i) begin
+      req_valid_q   <= 1'b0;
     end
   end
 

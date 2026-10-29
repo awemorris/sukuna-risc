@@ -50,18 +50,13 @@ module sukuna_hazard_unit (
   output wire       flush_ex_o
 );
 
-  // Pattern 2: Load-Use Hazard check
-  wire load_use_hazard = ex_is_load_i && (ex_load_rd_i != 5'd0) &&
-                         ((id1_rs1_l0_i == ex_load_rd_i) || (id1_rs2_l0_i == ex_load_rd_i) ||
-                          (id1_rs1_l1_i == ex_load_rd_i) || (id1_rs2_l1_i == ex_load_rd_i));
-
   // Global Stall: EX memory stall or Shared EU wait freezes all upstream stages
   wire upstream_freeze = ex_stall_i || shared_eu_stall_i;
 
-  assign stall_l1i_o = upstream_freeze || load_use_hazard;
-  assign stall_if1_o = upstream_freeze || l1i_miss_i || load_use_hazard;
-  assign stall_if2_o = upstream_freeze || load_use_hazard;
-  assign stall_id1_o = upstream_freeze || load_use_hazard;
+  assign stall_l1i_o = upstream_freeze;
+  assign stall_if1_o = upstream_freeze || l1i_miss_i;
+  assign stall_if2_o = upstream_freeze;
+  assign stall_id1_o = upstream_freeze;
   assign stall_id2_o = upstream_freeze;
   assign stall_id3_o = upstream_freeze;
   assign stall_ex_o  = ex_stall_i;
@@ -72,8 +67,12 @@ module sukuna_hazard_unit (
   assign flush_if1_o = global_flush;
   assign flush_if2_o = global_flush;
   assign flush_id1_o = global_flush;
-  assign flush_id2_o = global_flush || load_use_hazard; // Bubble insertion
+  assign flush_id2_o = global_flush;
   assign flush_id3_o = global_flush;
   assign flush_ex_o  = trap_flush_i;
+
+  // Avoid unused input warnings
+  wire _unused_haz = &{1'b0, clk_i, rst_ni, ex_is_load_i, ex_load_rd_i,
+                       id1_rs1_l0_i, id1_rs2_l0_i, id1_rs1_l1_i, id1_rs2_l1_i, 1'b0};
 
 endmodule
