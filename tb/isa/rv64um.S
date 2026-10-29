@@ -108,6 +108,30 @@ RVTEST_CODE_BEGIN
   li  t0, 42
   bne a4, t0, test_fail
 
+  // Test 12: MULHSU (signed x unsigned high 64 bits)
+  li  gp, 12
+  li  a1, -1
+  li  a2, 2
+  mulhsu a3, a1, a2
+  li  t0, -1
+  bne a3, t0, test_fail
+
+  // Test 13: DIVUW (unsigned 32-bit word division)
+  li  gp, 13
+  li  a1, 0x80000000
+  li  a2, 2
+  divuw a3, a1, a2
+  li  t0, 0x40000000
+  bne a3, t0, test_fail
+
+  // Test 14: REMUW (unsigned 32-bit word remainder)
+  li  gp, 14
+  li  a1, 0x80000003
+  li  a2, 2
+  remuw a3, a1, a2
+  li  t0, 1
+  bne a3, t0, test_fail
+
 test_pass:
   RVTEST_PASS
 
