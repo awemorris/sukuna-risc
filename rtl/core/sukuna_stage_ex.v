@@ -270,7 +270,7 @@ module sukuna_stage_ex #(
   // --------------------------------------------------------------------------
   // INT-EU Operand Routing
   // --------------------------------------------------------------------------
-  wire int_freeze = stall_i || ma_busy || (is_fp_op && fp_busy);
+  wire int_freeze = (stall_i && !int_busy) || ma_busy || (is_fp_op && fp_busy);
   wire int_valid  = !int_freeze && ((int_en_l0_i && l0_valid_i && !is_csr_op && !is_priv_op) ||
                                     (int_en_l1_i && l1_valid_i && !branch_mispredict_o));
 

@@ -243,10 +243,10 @@ module sukuna_tb_top;
   always @(posedge clk) begin
     if (rst_n) begin
       if (wb_l0_valid) begin
-        $display("[COMMIT L0] PC=0x%016h x%02d = 0x%016h", wb_l0_pc, wb_l0_rd, wb_l0_data);
+        $display("[%0d][COMMIT L0] PC=0x%016h x%02d = 0x%016h", cycle_count, wb_l0_pc, wb_l0_rd, wb_l0_data);
       end
       if (wb_l1_valid) begin
-        $display("[COMMIT L1] PC=0x%016h x%02d = 0x%016h", wb_l1_pc, wb_l1_rd, wb_l1_data);
+        $display("[%0d][COMMIT L1] PC=0x%016h x%02d = 0x%016h", cycle_count, wb_l1_pc, wb_l1_rd, wb_l1_data);
       end
 
       // Trap / Completion Monitor

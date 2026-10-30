@@ -51,6 +51,7 @@ module sukuna_thread_pipe #(
   // --------------------------------------------------------------------------
   output wire                       l1i_req_valid_o,
   output wire                       l1i_stall_o,
+  output wire                       l1i_flush_o,
   output wire [PADDR_WIDTH-1:2]     l1i_paddr_w_o,
   input  wire                       l1i_resp_valid_i,
   input  wire [63:0]                l1i_inst_i,
@@ -105,8 +106,10 @@ module sukuna_thread_pipe #(
   wire stall_l1i, stall_if1, stall_if2, stall_id1, stall_id2, stall_id3, stall_ex;
   assign l1i_stall_o = stall_l1i || wfi_sleep;
   wire flush_if1, flush_if2, flush_id1, flush_id2, flush_id3, flush_ex;
+  assign l1i_flush_o = flush_if1;
   wire ex_stall;
   wire [1:0] fetch_step;
+  wire       id1_hold_slot1;
 
   // Trap and redirection wires
   wire trap_valid;
@@ -133,6 +136,8 @@ module sukuna_thread_pipe #(
   // IF1 -> IF2
   wire            if1_valid;
   wire [XLEN-1:0] if1_pc;
+  wire            if1_odd;
+  wire            if2_stall_req;
 
   // IF2 -> ID1
   wire            if2_valid0, if2_valid1;
@@ -268,10 +273,6 @@ module sukuna_thread_pipe #(
   wire [XLEN-1:0] branch_target;
   wire [XLEN-1:0] if1_redirect_pc = trap_flush ? trap_target_pc : branch_target;
 
-  // Inter-stage Fetch Request (IF2 -> IF1)
-  wire            fetch_req_valid;
-  wire [XLEN-1:0] fetch_req_pc;
-
   // --------------------------------------------------------------------------
   // Stage 1: IF1
   // --------------------------------------------------------------------------
@@ -284,16 +285,20 @@ module sukuna_thread_pipe #(
   ) u_if1 (
     .clk_i            (clk_i),
     .rst_ni           (rst_ni),
+    .stall_i          (stall_if1),
     .flush_i          (flush_if1),
-    .fetch_req_valid_i(fetch_req_valid && !wfi_sleep),
-    .fetch_req_pc_i   (fetch_req_pc),
+    .redirect_pc_i    (if1_redirect_pc),
+    .wfi_sleep_i      (wfi_sleep),
     .itlb_req_valid_o (itlb_req_valid_o),
     .itlb_vaddr_w_o   (itlb_vaddr_w_o),
     .itlb_hit_i       (itlb_hit_i),
     .itlb_paddr_w_i   (itlb_paddr_w_i),
     .itlb_fault_i     (itlb_fault_i),
     .l1i_req_valid_o  (l1i_req_valid_o),
-    .l1i_paddr_w_o    (l1i_paddr_w_o)
+    .l1i_paddr_w_o    (l1i_paddr_w_o),
+    .if1_valid_o      (if1_valid),
+    .if1_pc_o         (if1_pc),
+    .if1_odd_o        (if1_odd)
   );
 
   // --------------------------------------------------------------------------
@@ -308,13 +313,14 @@ module sukuna_thread_pipe #(
     .rst_ni           (rst_ni),
     .stall_i          (stall_if2),
     .flush_i          (flush_if2),
-    .redirect_pc_i    (if1_redirect_pc),
     .consume_step_i   (fetch_step),
-    .fetch_req_valid_o(fetch_req_valid),
-    .fetch_req_pc_o   (fetch_req_pc),
+    .if1_valid_i      (if1_valid),
+    .if1_pc_i         (if1_pc),
+    .if1_odd_i        (if1_odd),
     .l1i_resp_valid_i (l1i_resp_valid_i),
     .l1i_inst_i       (l1i_inst_i),
     .l1i_miss_i       (l1i_miss_i),
+    .if2_stall_req_o  (if2_stall_req),
     .if2_valid0_o     (if2_valid0),
     .if2_pc0_o        (if2_pc0),
     .if2_inst0_o      (if2_inst0),
@@ -333,8 +339,9 @@ module sukuna_thread_pipe #(
     .rst_ni             (rst_ni),
     .stall_i            (stall_id1),
     .flush_i            (flush_id1),
-    .hold_slot0_i       (hold_slot0),
-    .hold_slot1_i       (hold_slot1),
+    .ma_eu_busy_i       (ex_stall),
+    .consume_step_o     (fetch_step),
+    .id1_hold_slot1_o   (id1_hold_slot1),
     .if2_valid0_i       (if2_valid0),
     .if2_pc0_i          (if2_pc0),
     .if2_inst0_i        (if2_inst0),
@@ -476,9 +483,9 @@ module sukuna_thread_pipe #(
     .id1_is_word1_i     (id1_is_word1),
     .id1_use_imm1_i     (id1_use_imm1),
     .id1_slot1_older_i  (id1_slot1_older),
-    .hold_slot0_o       (hold_slot0),
-    .hold_slot1_o       (hold_slot1),
-    .consume_step_o     (fetch_step),
+    .hold_slot0_o       (),
+    .hold_slot1_o       (),
+    .consume_step_o     (),
     .id2_slot1_older_o  (id2_slot1_older),
     .id2_valid0_o       (id2_valid0),
     .id2_pc0_o          (id2_pc0),
@@ -816,6 +823,8 @@ module sukuna_thread_pipe #(
     .ex_stall_i         (ex_stall),
     .l1i_miss_i         (l1i_miss_i),
     .shared_eu_stall_i  (shared_stall_i),
+    .if2_stall_req_i    (if2_stall_req),
+    .id1_hold_slot1_i   (id1_hold_slot1),
     .ex_is_load_i       (ex_ma_en_l0 || ex_ma_en_l1),
     .ex_load_rd_i       (ex_ma_en_l0 ? ex_l0_rd : ex_l1_rd),
     .id1_rs1_l0_i       (id1_rs1_0),

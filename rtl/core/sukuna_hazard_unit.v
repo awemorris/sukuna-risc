@@ -19,6 +19,8 @@ module sukuna_hazard_unit (
   input  wire       ex_stall_i,         // MA-EU stall (L1D miss, etc.)
   input  wire       l1i_miss_i,         // L1I miss
   input  wire       shared_eu_stall_i,  // Shared FP/SIMD busy (Pattern 5)
+  input  wire       if2_stall_req_i,    // IF2 skid buffer full
+  input  wire       id1_hold_slot1_i,   // ID1 holding Slot 1 for cycle 2
 
   // Load-Use hazard inputs (Pattern 2)
   input  wire       ex_is_load_i,
@@ -55,12 +57,12 @@ module sukuna_hazard_unit (
 
   // L1I is decoupled via IF2 fetch queue; only halt on WFI in thread pipe
   assign stall_l1i_o = 1'b0;
-  assign stall_if1_o = upstream_freeze || l1i_miss_i;
+  assign stall_if1_o = upstream_freeze || l1i_miss_i || if2_stall_req_i || id1_hold_slot1_i;
   assign stall_if2_o = upstream_freeze;
   assign stall_id1_o = upstream_freeze;
   assign stall_id2_o = upstream_freeze;
   assign stall_id3_o = upstream_freeze;
-  assign stall_ex_o  = shared_eu_stall_i;
+  assign stall_ex_o  = upstream_freeze;
 
   // Flush logic
   wire global_flush = branch_mispredict_i || trap_flush_i;

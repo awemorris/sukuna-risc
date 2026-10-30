@@ -101,58 +101,14 @@ module sukuna_stage_id2 #(
   output reg              id2_ma_en_l1_o    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 );
 
-  // --------------------------------------------------------------------------
-  // Dependency & Hazard Analysis between Lane 0 and Lane 1
-  // --------------------------------------------------------------------------
-  // Normal Mode (slot1_older == 0): Lane 0 is Older, Lane 1 is Younger
-  wire raw_hazard = id1_valid0_i && id1_valid1_i && (id1_rd0_i != 5'd0) &&
-                    ((id1_rs1_1_i == id1_rd0_i) || (id1_rs2_1_i == id1_rd0_i));
-
-  wire waw_hazard = id1_valid0_i && id1_valid1_i && (id1_rd0_i != 5'd0) &&
-                    (id1_rd0_i == id1_rd1_i);
-
-  wire mem_to_int_raw_hazard = id1_valid0_i && id1_valid1_i &&
-                               (id1_type0_i == 2'b10) && (id1_type1_i == 2'b01) &&
-                               (id1_rd0_i != 5'd0) &&
-                               ((id1_rs1_1_i == id1_rd0_i) || (id1_rs2_1_i == id1_rd0_i));
-
-  wire can_dual_int_ma = id1_valid0_i && id1_valid1_i &&
-                         (id1_type0_i == 2'b01) && (id1_type1_i == 2'b10) &&
-                         (id1_sys_op0_i == `SYS_NONE) &&
-                         (id1_br_type0_i == `BR_NONE) &&
-                         (id1_jump_type0_i == `JUMP_NONE) &&
-                         !raw_hazard && !waw_hazard && !ma_eu_busy_i;
-
-  wire can_dual_ma_int = id1_valid0_i && id1_valid1_i &&
-                         (id1_type0_i == 2'b10) && (id1_type1_i == 2'b01) &&
-                         (id1_sys_op0_i == `SYS_NONE) &&
-                         (id1_br_type0_i == `BR_NONE) &&
-                         (id1_jump_type0_i == `JUMP_NONE) &&
-                         !raw_hazard && !waw_hazard && !mem_to_int_raw_hazard && !ma_eu_busy_i;
-
-  wire can_dual_normal = id1_valid0_i && id1_valid1_i && !ma_eu_busy_i &&
-                         (id1_type0_i == 2'b01 && id1_type1_i == 2'b10) &&
-                         (id1_sys_op0_i == `SYS_NONE) &&
-                         (id1_br_type0_i == `BR_NONE) &&
-                         (id1_jump_type0_i == `JUMP_NONE) &&
-                         !raw_hazard && !waw_hazard;
-
-  // Inverted Mode (slot1_older == 1)
-  wire raw_hazard_inv = 1'b0;
-  wire waw_hazard_inv = 1'b0;
-  wire mem_to_int_raw_inv = 1'b0;
-  wire can_dual_int_ma_inv = 1'b0;
-  wire can_dual_ma_int_inv = 1'b0;
-  wire can_dual_inv = 1'b0;
-
-  // Hold & Fetch advance controls
-  assign hold_slot1_o = 1'b0;
-  assign hold_slot0_o = 1'b0;
-
-  assign consume_step_o = 2'd0;
-
+  // Issue decisions: ID1 already evaluated dual-issue pairing
   wire l0_issue = id1_valid0_i;
-  wire l1_issue = can_dual_normal;
+  wire l1_issue = id1_valid1_i;
+
+  // Stubs for unused feedback ports
+  assign hold_slot0_o   = 1'b0;
+  assign hold_slot1_o   = 1'b0;
+  assign consume_step_o = 2'd0;
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -234,17 +190,10 @@ module sukuna_stage_id2 #(
         id2_slot1_older_o <= id1_slot1_older_i;
 
         // Routing Enable Bits to EX stage
-        if (id1_slot1_older_i) begin
-          id2_int_en_l0_o <= l0_issue && (id1_type0_i == 2'b01);
-          id2_ma_en_l0_o  <= l0_issue && (id1_type0_i == 2'b10);
-          id2_int_en_l1_o <= l1_issue && (id1_type1_i == 2'b01);
-          id2_ma_en_l1_o  <= l1_issue && (id1_type1_i == 2'b10);
-        end else begin
-          id2_int_en_l0_o <= l0_issue && (id1_type0_i == 2'b01 || id1_jump_type0_i != `JUMP_NONE);
-          id2_ma_en_l0_o  <= l0_issue && (id1_type0_i == 2'b10);
-          id2_int_en_l1_o <= l1_issue && (id1_type1_i == 2'b01);
-          id2_ma_en_l1_o  <= l1_issue && (id1_type1_i == 2'b10);
-        end
+        id2_int_en_l0_o <= l0_issue && (id1_type0_i == 2'b01 || id1_br_type0_i != `BR_NONE || id1_jump_type0_i != `JUMP_NONE);
+        id2_ma_en_l0_o  <= l0_issue && (id1_type0_i == 2'b10);
+        id2_int_en_l1_o <= l1_issue && (id1_type1_i == 2'b01);
+        id2_ma_en_l1_o  <= l1_issue && (id1_type1_i == 2'b10);
       end
     end
   end
