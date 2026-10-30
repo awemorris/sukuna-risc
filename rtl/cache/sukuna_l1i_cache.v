@@ -139,7 +139,7 @@ module sukuna_l1i_cache #(
           req_paddr_w_q     <= fetch_paddr_w_i;
           req_valid_q       <= 1'b1;
           pipe2_way_valid_q <= req_way_valid;
-        end else if (miss_busy_q) begin
+        end else if (miss_busy_q && !refill_resp_valid_i) begin
           // Flush to different line while refilling: invalidate pipeline request
           req_valid_q       <= 1'b0;
           pipe2_way_valid_q <= {WAYS{1'b0}};
@@ -280,7 +280,7 @@ module sukuna_l1i_cache #(
     end else begin
       if (fence_i_flush_i) begin
         // flush handled by sk_ram_ff
-      end else if (flush_i && miss_busy_q && (fetch_paddr_w_i[PADDR_WIDTH-1:6] != req_paddr_w_q[PADDR_WIDTH-1:6])) begin
+      end else if (flush_i && miss_busy_q && !refill_resp_valid_i && (fetch_paddr_w_i[PADDR_WIDTH-1:6] != req_paddr_w_q[PADDR_WIDTH-1:6])) begin
         discard_refill_q    <= 1'b1;
         pending_flush_req_q <= 1'b1;
         pending_paddr_w_q   <= fetch_paddr_w_i;

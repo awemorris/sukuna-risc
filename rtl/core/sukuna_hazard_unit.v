@@ -56,8 +56,9 @@ module sukuna_hazard_unit (
   wire upstream_freeze = ex_stall_i || shared_eu_stall_i;
 
   // L1I is decoupled via IF2 fetch queue; only halt on WFI in thread pipe
+  // upstream_freeze is decoupled from IF1 via IF2 skid buffer (Rule 5)
   assign stall_l1i_o = 1'b0;
-  assign stall_if1_o = upstream_freeze || l1i_miss_i || if2_stall_req_i || id1_hold_slot1_i;
+  assign stall_if1_o = l1i_miss_i || if2_stall_req_i || id1_hold_slot1_i;
   assign stall_if2_o = upstream_freeze;
   assign stall_id1_o = upstream_freeze;
   assign stall_id2_o = upstream_freeze;
