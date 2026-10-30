@@ -54,6 +54,17 @@ module sukuna_agu_eu #(
   input  wire [XLEN-1:0]        l1d_rdata_i,
   input  wire                   l1d_miss_stall_i,
 
+  // Dedicated Uncached / MMIO Port
+  output wire                   uncached_req_valid_o,
+  output wire                   uncached_req_write_o,
+  output wire [3:0]             uncached_req_op_o,
+  output wire [7:0]             uncached_req_byte_en_o,
+  output wire [PADDR_WIDTH-1:2] uncached_req_paddr_w_o,
+  output wire [XLEN-1:0]        uncached_req_wdata_o,
+  input  wire                   uncached_req_ready_i,
+  input  wire                   uncached_resp_valid_i,
+  input  wire [XLEN-1:0]        uncached_resp_rdata_i,
+
   // Output to Writeback Stage
   output wire                   resp_valid_o,
   output wire [4:0]             resp_rd_o,
@@ -139,6 +150,9 @@ module sukuna_agu_eu #(
 
   wire sc_match = res_valid_q && (res_paddr_w_q == store_paddr_w_q);
 
+  // Physical Memory Attribute (PMA): RAM is >= 0x8000_0000; Devices / MMIO are < 0x8000_0000
+  wire is_uncached = !dtlb_paddr_w_i[31];
+
   // L1D Request Driving (driven during MA1 or during AMO STORE)
   assign l1d_paddr_w_o       = (agu_state_q == S_AGU_STORE) ? store_paddr_w_q : dtlb_paddr_w_i;
   assign l1d_req_op_o        = s1_op_q[3:0];
@@ -146,12 +160,21 @@ module sukuna_agu_eu #(
   assign l1d_wdata_o         = (agu_state_q == S_AGU_STORE) ? amo_wdata_q : s1_wdata_q;
 
   assign l1d_req_valid_o     = (agu_state_q == S_AGU_STORE) ? 1'b1 :
-                               (s1_valid_q && dtlb_hit_i && !s1_is_sc);
+                               (s1_valid_q && dtlb_hit_i && !is_uncached && !s1_is_sc);
   assign l1d_req_write_o     = (agu_state_q == S_AGU_STORE) ? 1'b1 :
                                (s1_is_alu_amo || s1_is_sc) ? 1'b0 : s1_op_q[3];
 
+  // Dedicated Uncached Request Driving
+  assign uncached_req_valid_o   = s1_valid_q && dtlb_hit_i && is_uncached;
+  assign uncached_req_write_o   = s1_op_q[3];
+  assign uncached_req_op_o      = s1_op_q[3:0];
+  assign uncached_req_byte_en_o = s1_byte_en_q;
+  assign uncached_req_paddr_w_o = dtlb_paddr_w_i;
+  assign uncached_req_wdata_o   = s1_wdata_q;
+
   // Stage 2 Registers (MA1 -> MA2)
   reg                     s2_valid_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_is_uncached_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [7:0]               s2_op_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0]               s2_rd_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [2:0]               s2_addr_lsb_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -262,43 +285,47 @@ module sukuna_agu_eu #(
 
   // Unit Busy Signal: High while any stage holds valid operations or waiting for cache/amo
   // Driven strictly by registered state flags to prevent combinational feedthrough
-  assign busy_o = s1_valid_q || s2_valid_q || (agu_state_q != S_AGU_IDLE) || sc_failed_q || l1d_miss_stall_i;
+  assign busy_o = s1_valid_q || s2_valid_q || (agu_state_q != S_AGU_IDLE) || sc_failed_q;
+
+  wire             resp_valid_in = s2_is_uncached_q ? uncached_resp_valid_i : l1d_resp_valid_i;
+  wire [XLEN-1:0]  resp_data_in  = s2_is_uncached_q ? uncached_resp_rdata_i : l1d_rdata_i;
 
   // --------------------------------------------------------------------------
   // Sequential Pipeline State Update
   // --------------------------------------------------------------------------
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      s1_valid_q      <= 1'b0;
-      s1_op_q         <= 8'd0;
-      s1_byte_en_q    <= 8'd0;
-      s1_rd_q         <= 5'd0;
-      s1_vaddr_w_q    <= {(VADDR_WIDTH-2){1'b0}};
-      s1_addr_lsb_q   <= 3'd0;
-      s1_wdata_q      <= {XLEN{1'b0}};
-      s1_orig_wdata_q <= {XLEN{1'b0}};
+      s1_valid_q       <= 1'b0;
+      s1_op_q          <= 8'd0;
+      s1_byte_en_q     <= 8'd0;
+      s1_rd_q          <= 5'd0;
+      s1_vaddr_w_q     <= {(VADDR_WIDTH-2){1'b0}};
+      s1_addr_lsb_q    <= 3'd0;
+      s1_wdata_q       <= {XLEN{1'b0}};
+      s1_orig_wdata_q  <= {XLEN{1'b0}};
 
-      s2_valid_q      <= 1'b0;
-      s2_op_q         <= 8'd0;
-      s2_rd_q         <= 5'd0;
-      s2_addr_lsb_q   <= 3'd0;
-      s2_paddr_w_q    <= {(PADDR_WIDTH-2){1'b0}};
-      s2_orig_wdata_q <= {XLEN{1'b0}};
+      s2_valid_q       <= 1'b0;
+      s2_is_uncached_q <= 1'b0;
+      s2_op_q          <= 8'd0;
+      s2_rd_q          <= 5'd0;
+      s2_addr_lsb_q    <= 3'd0;
+      s2_paddr_w_q     <= {(PADDR_WIDTH-2){1'b0}};
+      s2_orig_wdata_q  <= {XLEN{1'b0}};
 
-      buf_valid_q     <= 1'b0;
-      buf_raw_data_q  <= 64'd0;
-      buf_rd_q        <= 5'd0;
-      buf_op_q        <= 8'd0;
-      buf_addr_lsb_q  <= 3'd0;
+      buf_valid_q      <= 1'b0;
+      buf_raw_data_q   <= 64'd0;
+      buf_rd_q         <= 5'd0;
+      buf_op_q         <= 8'd0;
+      buf_addr_lsb_q   <= 3'd0;
 
-      agu_state_q     <= S_AGU_IDLE;
-      res_valid_q     <= 1'b0;
-      res_paddr_w_q   <= {(PADDR_WIDTH-2){1'b0}};
-      store_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
-      amo_rdata_q     <= {XLEN{1'b0}};
-      amo_wdata_q     <= {XLEN{1'b0}};
-      sc_failed_q     <= 1'b0;
-      sc_success_q    <= 1'b0;
+      agu_state_q      <= S_AGU_IDLE;
+      res_valid_q      <= 1'b0;
+      res_paddr_w_q    <= {(PADDR_WIDTH-2){1'b0}};
+      store_paddr_w_q  <= {(PADDR_WIDTH-2){1'b0}};
+      amo_rdata_q      <= {XLEN{1'b0}};
+      amo_wdata_q      <= {XLEN{1'b0}};
+      sc_failed_q      <= 1'b0;
+      sc_success_q     <= 1'b0;
     end else begin
       // Multi-hart coherence snoop invalidation: clear reservation if matching cache line
       if (snoop_inv_valid_i && (snoop_inv_paddr_w_i[PADDR_WIDTH-1:6] == res_paddr_w_q[PADDR_WIDTH-1:6])) begin
@@ -314,15 +341,15 @@ module sukuna_agu_eu #(
             sc_failed_q <= 1'b0;
           end
 
-          // MA2 Stage: Capture L1D response into holding buffer
-          if (s2_valid_q && l1d_resp_valid_i) begin
+          // MA2 Stage: Capture L1D or Uncached response into holding buffer
+          if (s2_valid_q && resp_valid_in) begin
             s2_valid_q <= 1'b0;
             if (s2_op_q[7:4] == `AMO_LR) begin
               // LR sets reservation
               res_valid_q    <= 1'b1;
               res_paddr_w_q  <= s2_paddr_w_q;
               buf_valid_q    <= 1'b1;
-              buf_raw_data_q <= l1d_rdata_i;
+              buf_raw_data_q <= resp_data_in;
               buf_rd_q       <= s2_rd_q;
               buf_op_q       <= s2_op_q;
               buf_addr_lsb_q <= s2_addr_lsb_q;
@@ -337,7 +364,7 @@ module sukuna_agu_eu #(
                 res_valid_q  <= 1'b0; // Any store clears reservation
               end
               buf_valid_q    <= 1'b1;
-              buf_raw_data_q <= l1d_rdata_i;
+              buf_raw_data_q <= resp_data_in;
               buf_rd_q       <= s2_rd_q;
               buf_op_q       <= s2_op_q;
               buf_addr_lsb_q <= s2_addr_lsb_q;
@@ -351,15 +378,16 @@ module sukuna_agu_eu #(
               store_paddr_w_q <= dtlb_paddr_w_i;
               agu_state_q     <= S_AGU_SC;
               s1_valid_q      <= 1'b0;
-            end else if (dtlb_hit_i && !s2_valid_q) begin
+            end else if (dtlb_hit_i && !s2_valid_q && (!is_uncached || uncached_req_ready_i)) begin
               // Advance to MA2
-              s2_valid_q      <= 1'b1;
-              s2_op_q         <= s1_op_q;
-              s2_rd_q         <= s1_rd_q;
-              s2_addr_lsb_q   <= s1_addr_lsb_q;
-              s2_paddr_w_q    <= dtlb_paddr_w_i;
-              s2_orig_wdata_q <= s1_orig_wdata_q;
-              s1_valid_q      <= 1'b0;
+              s2_valid_q        <= 1'b1;
+              s2_is_uncached_q  <= is_uncached;
+              s2_op_q           <= s1_op_q;
+              s2_rd_q           <= s1_rd_q;
+              s2_addr_lsb_q     <= s1_addr_lsb_q;
+              s2_paddr_w_q      <= dtlb_paddr_w_i;
+              s2_orig_wdata_q   <= s1_orig_wdata_q;
+              s1_valid_q        <= 1'b0;
             end
           end
 

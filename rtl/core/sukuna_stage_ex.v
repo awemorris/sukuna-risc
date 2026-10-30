@@ -121,6 +121,17 @@ module sukuna_stage_ex #(
   input  wire [XLEN-1:0]        l1d_rdata_i,
   input  wire                   l1d_miss_stall_i,
 
+  // Dedicated Uncached / MMIO Port
+  output wire                   uncached_req_valid_o,
+  output wire                   uncached_req_write_o,
+  output wire [3:0]             uncached_req_op_o,
+  output wire [7:0]             uncached_req_byte_en_o,
+  output wire [PADDR_WIDTH-1:2] uncached_req_paddr_w_o,
+  output wire [XLEN-1:0]        uncached_req_wdata_o,
+  input  wire                   uncached_req_ready_i,
+  input  wire                   uncached_resp_valid_i,
+  input  wire [XLEN-1:0]        uncached_resp_rdata_i,
+
   // Output to WB Stage: Lane 0
   output wire                   ex_wb_l0_valid_o,
   output wire [XLEN-1:0]        ex_wb_l0_pc_o,
@@ -425,6 +436,15 @@ module sukuna_stage_ex #(
     .l1d_resp_valid_i   (l1d_resp_valid_i),
     .l1d_rdata_i        (l1d_rdata_i),
     .l1d_miss_stall_i   (l1d_miss_stall_i),
+    .uncached_req_valid_o  (uncached_req_valid_o),
+    .uncached_req_write_o  (uncached_req_write_o),
+    .uncached_req_op_o     (uncached_req_op_o),
+    .uncached_req_byte_en_o(uncached_req_byte_en_o),
+    .uncached_req_paddr_w_o(uncached_req_paddr_w_o),
+    .uncached_req_wdata_o  (uncached_req_wdata_o),
+    .uncached_req_ready_i  (uncached_req_ready_i),
+    .uncached_resp_valid_i (uncached_resp_valid_i),
+    .uncached_resp_rdata_i (uncached_resp_rdata_i),
     .resp_valid_o       (ma_out_valid),
     .resp_rd_o          (ma_out_rd),
     .resp_rdata_o       (ma_out_rdata)

@@ -36,7 +36,18 @@ module sukuna_core #(
 
   input  wire                               l2_resp_valid_i,
   input  wire [3:0]                         l2_resp_source_i,
-  input  wire [CACHE_LINE_BITS-1:0]         l2_resp_rdata_i
+  input  wire [CACHE_LINE_BITS-1:0]         l2_resp_rdata_i,
+
+  // Dedicated Uncached / MMIO Port
+  output wire [NUM_HARTS-1:0]               uncached_req_valid_o,
+  output wire [NUM_HARTS-1:0]               uncached_req_write_o,
+  output wire [NUM_HARTS*4-1:0]             uncached_req_op_o,
+  output wire [NUM_HARTS*8-1:0]             uncached_req_byte_en_o,
+  output wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0] uncached_req_paddr_w_o,
+  output wire [NUM_HARTS*XLEN-1:0]          uncached_req_wdata_o,
+  input  wire [NUM_HARTS-1:0]               uncached_req_ready_i,
+  input  wire [NUM_HARTS-1:0]               uncached_resp_valid_i,
+  input  wire [NUM_HARTS*XLEN-1:0]          uncached_resp_rdata_i
 );
 
   // Satp and flushes per Hart
@@ -153,6 +164,16 @@ module sukuna_core #(
         .l1d_resp_valid_i   (l1d_resp_valid[h]),
         .l1d_rdata_i        (l1d_rdata[h*XLEN +: XLEN]),
         .l1d_miss_stall_i   (l1d_miss_stall[h]),
+
+        .uncached_req_valid_o  (uncached_req_valid_o[h]),
+        .uncached_req_write_o  (uncached_req_write_o[h]),
+        .uncached_req_op_o     (uncached_req_op_o[h*4 +: 4]),
+        .uncached_req_byte_en_o(uncached_req_byte_en_o[h*8 +: 8]),
+        .uncached_req_paddr_w_o(uncached_req_paddr_w_o[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
+        .uncached_req_wdata_o  (uncached_req_wdata_o[h*XLEN +: XLEN]),
+        .uncached_req_ready_i  (uncached_req_ready_i[h]),
+        .uncached_resp_valid_i (uncached_resp_valid_i[h]),
+        .uncached_resp_rdata_i (uncached_resp_rdata_i[h*XLEN +: XLEN]),
 
         .shared_req_valid_o (shared_req_valid[h]),
         .shared_req_type_o  (shared_req_type[h*2 +: 2]),

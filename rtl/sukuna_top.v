@@ -123,25 +123,15 @@ module sukuna_top #(
   wire [CACHE_LINE_BITS-1:0] mem_resp_rdata;
 
   // --------------------------------------------------------------------------
-  // Core Memory Request Router: MMIO (PLIC & CLINT) vs Shared L2 Cache
-  // Registered pipeline stage decouples Sukuna Core boundary from L2/MMIO logic
+  // Core to Shared L2 Cache Request Decoupling Pipeline Register
   // --------------------------------------------------------------------------
   reg                       core_req_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg                       core_req_write_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [3:0]                 core_req_source_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]     core_req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  wire is_mmio = (core_req_paddr_w_q[PADDR_WIDTH-1:28] == {(PADDR_WIDTH-28){1'b0}});
-
-  wire mmio_req_ready, mmio_resp_valid;
-  wire [XLEN-1:0]            mmio_resp_rdata;
-  wire                       l2_cache_req_ready;
-  wire                       l2_cache_resp_valid;
-  wire [3:0]                 l2_cache_resp_source;
-  wire [CACHE_LINE_BITS-1:0] l2_cache_resp_rdata;
-
-  wire target_ready  = is_mmio ? mmio_req_ready : l2_cache_req_ready;
-  wire core_req_busy = core_req_valid_q && !target_ready;
+  wire                      l2_cache_req_ready;
+  wire                      core_req_busy = core_req_valid_q && !l2_cache_req_ready;
 
   // 512-bit Core Request Write Data Buffer instantiated via sk_ram_ff macro
   wire [CACHE_LINE_BITS-1:0] core_req_wdata_q;
@@ -181,21 +171,65 @@ module sukuna_top #(
 
   assign l2_req_ready = !core_req_busy;
 
-  wire mmio_req_valid  = core_req_valid_q && is_mmio;
-  wire cache_req_valid = core_req_valid_q && !is_mmio;
+  // --------------------------------------------------------------------------
+  // Dedicated Uncached & MMIO Controller
+  // --------------------------------------------------------------------------
+  wire [NUM_HARTS-1:0]                 uncached_core_req_valid;
+  wire [NUM_HARTS-1:0]                 uncached_core_req_write;
+  wire [NUM_HARTS*4-1:0]               uncached_core_req_op;
+  wire [NUM_HARTS*8-1:0]               uncached_core_req_byte_en;
+  wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0] uncached_core_req_paddr_w;
+  wire [NUM_HARTS*XLEN-1:0]            uncached_core_req_wdata;
+  wire [NUM_HARTS-1:0]                 uncached_core_req_ready;
+  wire [NUM_HARTS-1:0]                 uncached_core_resp_valid;
+  wire [NUM_HARTS*XLEN-1:0]            uncached_core_resp_rdata;
 
-  reg [3:0] mmio_src_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  always @(posedge clk_i or negedge core_rst_n) begin
-    if (!core_rst_n) begin
-      mmio_src_q <= 4'd0;
-    end else if (mmio_req_valid && mmio_req_ready) begin
-      mmio_src_q <= core_req_source_q;
-    end
-  end
+  wire                                 mmio_req_valid;
+  wire                                 mmio_req_write;
+  wire [XLEN-1:0]                      mmio_req_addr;
+  wire [XLEN-1:0]                      mmio_req_wdata;
+  wire [(XLEN/8)-1:0]                  mmio_req_wstrb;
+  wire                                 mmio_req_ready;
+  wire                                 mmio_resp_valid;
+  wire [XLEN-1:0]                      mmio_resp_rdata;
 
-  assign l2_resp_valid   = l2_cache_resp_valid | mmio_resp_valid;
-  assign l2_resp_source  = mmio_resp_valid ? mmio_src_q : l2_cache_resp_source;
-  assign l2_resp_rdata   = mmio_resp_valid ? {8{mmio_resp_rdata}} : l2_cache_resp_rdata;
+  sukuna_uncached_ctrl #(
+    .NUM_HARTS  (NUM_HARTS),
+    .XLEN       (XLEN),
+    .PADDR_WIDTH(PADDR_WIDTH)
+  ) u_uncached_ctrl (
+    .clk_i            (clk_i),
+    .rst_ni           (core_rst_n),
+    .core_req_valid_i (uncached_core_req_valid),
+    .core_req_write_i (uncached_core_req_write),
+    .core_req_op_i    (uncached_core_req_op),
+    .core_req_byte_en_i(uncached_core_req_byte_en),
+    .core_req_paddr_w_i(uncached_core_req_paddr_w),
+    .core_req_wdata_i (uncached_core_req_wdata),
+    .core_req_ready_o (uncached_core_req_ready),
+    .core_resp_valid_o(uncached_core_resp_valid),
+    .core_resp_rdata_o(uncached_core_resp_rdata),
+
+    // On-chip MMIO (to sukuna_interrupt_subsys)
+    .mmio_req_valid_o (mmio_req_valid),
+    .mmio_req_write_o (mmio_req_write),
+    .mmio_req_addr_o  (mmio_req_addr),
+    .mmio_req_wdata_o (mmio_req_wdata),
+    .mmio_req_wstrb_o (mmio_req_wstrb),
+    .mmio_req_ready_i (mmio_req_ready),
+    .mmio_resp_valid_i(mmio_resp_valid),
+    .mmio_resp_rdata_i(mmio_resp_rdata),
+
+    // External Uncached Device
+    .ext_req_valid_o  (),
+    .ext_req_write_o  (),
+    .ext_req_addr_o   (),
+    .ext_req_wdata_o  (),
+    .ext_req_wstrb_o  (),
+    .ext_req_ready_i  (1'b0),
+    .ext_resp_valid_i (1'b0),
+    .ext_resp_rdata_i ({XLEN{1'b0}})
+  );
 
   // --------------------------------------------------------------------------
   // Interrupt Subsystem (PLIC & CLINT)
@@ -209,10 +243,10 @@ module sukuna_top #(
     .rst_ni           (core_rst_n),
     .ext_irq_i        (ext_irq_i),
     .mmio_req_valid_i (mmio_req_valid),
-    .mmio_req_write_i (core_req_write_q),
-    .mmio_req_addr_i  ({{(XLEN-PADDR_WIDTH){1'b0}}, core_req_paddr_w_q, 2'b00}),
-    .mmio_req_wdata_i (core_req_wdata_q[XLEN-1:0]),
-    .mmio_req_wstrb_i ({(XLEN/8){1'b1}}),
+    .mmio_req_write_i (mmio_req_write),
+    .mmio_req_addr_i  (mmio_req_addr),
+    .mmio_req_wdata_i (mmio_req_wdata),
+    .mmio_req_wstrb_i (mmio_req_wstrb),
     .mmio_req_ready_o (mmio_req_ready),
     .mmio_resp_valid_o(mmio_resp_valid),
     .mmio_resp_rdata_o(mmio_resp_rdata),
@@ -247,7 +281,17 @@ module sukuna_top #(
     .l2_req_ready_i  (l2_req_ready),
     .l2_resp_valid_i (l2_resp_valid),
     .l2_resp_source_i(l2_resp_source),
-    .l2_resp_rdata_i (l2_resp_rdata)
+    .l2_resp_rdata_i (l2_resp_rdata),
+
+    .uncached_req_valid_o  (uncached_core_req_valid),
+    .uncached_req_write_o  (uncached_core_req_write),
+    .uncached_req_op_o     (uncached_core_req_op),
+    .uncached_req_byte_en_o(uncached_core_req_byte_en),
+    .uncached_req_paddr_w_o(uncached_core_req_paddr_w),
+    .uncached_req_wdata_o  (uncached_core_req_wdata),
+    .uncached_req_ready_i  (uncached_core_req_ready),
+    .uncached_resp_valid_i (uncached_core_resp_valid),
+    .uncached_resp_rdata_i (uncached_core_resp_rdata)
   );
 
   // --------------------------------------------------------------------------
@@ -259,15 +303,15 @@ module sukuna_top #(
   ) u_l2_cache (
     .clk_i           (clk_i),
     .rst_ni          (core_rst_n),
-    .req_valid_i     (cache_req_valid),
+    .req_valid_i     (core_req_valid_q),
     .req_write_i     (core_req_write_q),
     .req_source_i    (core_req_source_q),
     .req_paddr_w_i   (core_req_paddr_w_q),
     .req_wdata_i     (core_req_wdata_q),
     .req_ready_o     (l2_cache_req_ready),
-    .resp_valid_o    (l2_cache_resp_valid),
-    .resp_source_o   (l2_cache_resp_source),
-    .resp_rdata_o    (l2_cache_resp_rdata),
+    .resp_valid_o    (l2_resp_valid),
+    .resp_source_o   (l2_resp_source),
+    .resp_rdata_o    (l2_resp_rdata),
     .mem_req_valid_o (mem_req_valid),
     .mem_req_write_o (mem_req_write),
     .mem_req_paddr_w_o(mem_req_paddr_w),
