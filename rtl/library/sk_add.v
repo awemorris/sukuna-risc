@@ -25,7 +25,28 @@ module sk_add #(
 
   generate
     if (IMPL == "DSP") begin : gen_dsp
-      `ifdef SYNTH_KINTEX7
+      `ifdef SYNTH_DESIGNWARE
+      wire [WIDTH-1:0] dw_sum;
+      wire             dw_co;
+      DW01_add #(.width(WIDTH)) u_dw_add (
+        .A(a_i),
+        .B(b_i),
+        .CI(cin_i),
+        .SUM(dw_sum),
+        .CO(dw_co)
+      );
+      if (PIPELINE) begin : gen_pipe
+        reg [WIDTH-1:0] sum_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg             cout_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        always @(posedge clk_i or negedge rst_ni) begin
+          if (!rst_ni) begin sum_q <= {WIDTH{1'b0}}; cout_q <= 1'b0; end
+          else         begin sum_q <= dw_sum;        cout_q <= dw_co;  end
+        end
+        assign sum_o = sum_q; assign cout_o = cout_q;
+      end else begin : gen_comb
+        assign sum_o = dw_sum; assign cout_o = dw_co;
+      end
+      `elsif SYNTH_KINTEX7
       if (WIDTH <= 48 && PIPELINE >= 1) begin : gen_kintex7_dsp
         wire [29:0] dsp_a = (WIDTH > 18) ? {{(30-(WIDTH-18)){1'b0}}, a_i[WIDTH-1:18]} : 30'd0;
         wire [17:0] dsp_b = (WIDTH > 18) ? a_i[17:0] : {{(18-WIDTH){1'b0}}, a_i};
@@ -97,6 +118,28 @@ module sk_add #(
       `endif
 
     end else if (IMPL == "CARRY") begin : gen_carry
+      `ifdef SYNTH_DESIGNWARE
+      wire [WIDTH-1:0] dw_sum;
+      wire             dw_co;
+      DW01_add #(.width(WIDTH)) u_dw_add (
+        .A(a_i),
+        .B(b_i),
+        .CI(cin_i),
+        .SUM(dw_sum),
+        .CO(dw_co)
+      );
+      if (PIPELINE) begin : gen_pipe
+        reg [WIDTH-1:0] sum_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg             cout_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        always @(posedge clk_i or negedge rst_ni) begin
+          if (!rst_ni) begin sum_q <= {WIDTH{1'b0}}; cout_q <= 1'b0; end
+          else         begin sum_q <= dw_sum;        cout_q <= dw_co;  end
+        end
+        assign sum_o = sum_q; assign cout_o = cout_q;
+      end else begin : gen_comb
+        assign sum_o = dw_sum; assign cout_o = dw_co;
+      end
+      `else
       // Uses FPGA dedicated slice carry chain (CARRY4)
       (* use_dsp = "no" *)
       wire [WIDTH:0] carry_comb = a_i + b_i + {{WIDTH{1'b0}}, cin_i};
@@ -111,6 +154,7 @@ module sk_add #(
       end else begin : gen_comb
         assign sum_o = carry_comb[WIDTH-1:0]; assign cout_o = carry_comb[WIDTH];
       end
+      `endif
 
     end else begin : gen_logic
       // Pure LUT Logic (ASIC standard cell / FPGA LUT gate logic)

@@ -17,6 +17,31 @@ module sk_msb #(
   output wire                 nonzero_o  // 1 if at least one bit is set
 );
 
+`ifdef SYNTH_DESIGNWARE
+  wire [IDX_WIDTH-1:0] dw_index;
+  wire                 dw_none;
+
+  DW01_prienc #(
+    .A_width     (WIDTH),
+    .INDEX_width (IDX_WIDTH)
+  ) u_dw_prienc (
+    .A     (data_i),
+    .INDEX (dw_index),
+    .NONE  (dw_none)
+  );
+
+  assign nonzero_o = ~dw_none;
+
+  always @(*) begin
+    if (dw_none) begin
+      msb_idx_o = {IDX_WIDTH{1'b0}};
+      clz_o     = WIDTH[IDX_WIDTH:0];
+    end else begin
+      msb_idx_o = dw_index;
+      clz_o     = WIDTH[IDX_WIDTH:0] - 1'b1 - {1'b0, dw_index};
+    end
+  end
+`else
   assign nonzero_o = |data_i;
 
   integer i;
@@ -30,5 +55,6 @@ module sk_msb #(
       end
     end
   end
+`endif
 
 endmodule

@@ -24,6 +24,47 @@ module sk_shift #(
   output wire [WIDTH-1:0]      result_o
 );
 
+`ifdef SYNTH_DESIGNWARE
+  wire [WIDTH-1:0] data_rev;
+  genvar gi;
+  generate
+    for (gi = 0; gi < WIDTH; gi = gi + 1) begin : gen_rev_in
+      assign data_rev[gi] = data_i[WIDTH - 1 - gi];
+    end
+  endgenerate
+
+  wire [WIDTH-1:0] bsh_in = (op_i == 2'b00) ? data_rev : data_i;
+  wire [WIDTH-1:0] bsh_out;
+
+  DW01_bsh #(
+    .A_width  (WIDTH),
+    .SH_width (SHIFT_BITS)
+  ) u_dw_bsh (
+    .A  (bsh_in),
+    .SH (shamt_i),
+    .B  (bsh_out)
+  );
+
+  wire [WIDTH-1:0] bsh_out_rev;
+  generate
+    for (gi = 0; gi < WIDTH; gi = gi + 1) begin : gen_rev_out
+      assign bsh_out_rev[gi] = bsh_out[WIDTH - 1 - gi];
+    end
+  endgenerate
+
+  wire [WIDTH-1:0] sra_mask = (shamt_i == {SHIFT_BITS{1'b0}}) ? {WIDTH{1'b0}} :
+                              ~({WIDTH{1'b1}} >> shamt_i);
+
+  reg [WIDTH-1:0] comb_res;
+  always @(*) begin
+    case (op_i)
+      2'b00:   comb_res = bsh_out_rev;
+      2'b01:   comb_res = bsh_out;
+      2'b10:   comb_res = data_i[WIDTH-1] ? (bsh_out | sra_mask) : bsh_out;
+      default: comb_res = data_i;
+    endcase
+  end
+`else
   reg [WIDTH-1:0] comb_res;
 
   always @(*) begin
@@ -34,6 +75,7 @@ module sk_shift #(
       default: comb_res = data_i;
     endcase
   end
+`endif
 
   generate
     if (PIPELINE) begin : gen_pipe

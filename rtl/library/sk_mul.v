@@ -24,7 +24,45 @@ module sk_mul #(
 
   generate
     if (IMPL == "DSP") begin : gen_dsp
-      `ifdef SYNTH_KINTEX7
+      `ifdef SYNTH_DESIGNWARE
+        if (LAT == 0) begin : gen_lat0
+          DW02_mult #(.A_width(AW), .B_width(BW)) u_dw_mult (
+            .A(a),
+            .B(b),
+            .TC(SIGNED ? 1'b1 : 1'b0),
+            .PRODUCT(p)
+          );
+        end else if (LAT == 2) begin : gen_lat2
+          DW02_mult_2p #(.A_width(AW), .B_width(BW)) u_dw_mult_2p (
+            .CLK(clk),
+            .TC(SIGNED ? 1'b1 : 1'b0),
+            .A(a),
+            .B(b),
+            .PRODUCT(p)
+          );
+        end else if (LAT == 3) begin : gen_lat3
+          DW02_mult_3p #(.A_width(AW), .B_width(BW)) u_dw_mult_3p (
+            .CLK(clk),
+            .TC(SIGNED ? 1'b1 : 1'b0),
+            .A(a),
+            .B(b),
+            .PRODUCT(p)
+          );
+        end else begin : gen_lat_pipe
+          wire [AW+BW-1:0] dw_prod;
+          DW02_mult #(.A_width(AW), .B_width(BW)) u_dw_mult (
+            .A(a),
+            .B(b),
+            .TC(SIGNED ? 1'b1 : 1'b0),
+            .PRODUCT(dw_prod)
+          );
+          reg [AW+BW-1:0] r_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+          always @(posedge clk) begin
+            if (en) r_q <= dw_prod;
+          end
+          assign p = r_q;
+        end
+      `elsif SYNTH_KINTEX7
       // ----------------------------------------------------------------------
       // Kintex-7 Hardware DSP48E1 Direct Instantiation
       // ----------------------------------------------------------------------
@@ -254,6 +292,22 @@ module sk_mul #(
       `endif
 
     end else if (IMPL == "CARRY") begin : gen_carry
+      `ifdef SYNTH_DESIGNWARE
+      wire [AW+BW-1:0] dw_prod;
+      DW02_mult #(.A_width(AW), .B_width(BW)) u_dw_mult (
+        .A(a),
+        .B(b),
+        .TC(SIGNED ? 1'b1 : 1'b0),
+        .PRODUCT(dw_prod)
+      );
+      if (LAT == 0) begin : gen_lat0
+        assign p = dw_prod;
+      end else begin : gen_lat_pipe
+        reg [AW+BW-1:0] r_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        always @(posedge clk) if (en) r_q <= dw_prod;
+        assign p = r_q;
+      end
+      `else
       // Multiplier built using LUTs + Carry chain logic (NO DSP)
       (* use_dsp = "no" *)
       wire signed [AW:0] ext_a = SIGNED ? {a[AW-1], a} : {1'b0, a};
@@ -267,6 +321,7 @@ module sk_mul #(
         always @(posedge clk) if (en) r_q <= full_prod[AW+BW-1:0];
         assign p = r_q;
       end
+      `endif
 
     end else begin : gen_logic
       // Pure LUT Logic multiplier (NO DSP)

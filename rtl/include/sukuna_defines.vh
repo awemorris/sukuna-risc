@@ -173,4 +173,11 @@
 // (Can also be passed via compiler flag -DSYNTH_KINTEX7)
 // `define SYNTH_KINTEX7 1
 
+// Define SYNTH_DESIGNWARE to instantiate Synopsys DesignWare building block modules directly
+// (e.g., DW01_add, DW01_sub, DW01_addsub, DW02_mult, DW02_mult_2p/3p, DW02_mac, etc.)
+// `define SYNTH_DESIGNWARE 1
+
+// Define SYNTH_VIVADO when running inside AMD/Xilinx Vivado synthesis toolchain
+// `define SYNTH_VIVADO 1
+
 `endif // SUKUNA_DEFINES_VH

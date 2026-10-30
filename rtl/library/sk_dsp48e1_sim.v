@@ -7,7 +7,7 @@
 `include "sukuna_defines.vh"
 
 `ifdef SYNTH_KINTEX7
-`ifndef VIVADO
+`ifndef SYNTH_VIVADO
 
 module DSP48E1 #(
   parameter integer ACASCREG          = 1,
@@ -131,5 +131,5 @@ module DSP48E1 #(
 
 endmodule
 
-`endif // !VIVADO
+`endif // !SYNTH_VIVADO
 `endif // SYNTH_KINTEX7

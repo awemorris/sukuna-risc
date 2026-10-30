@@ -30,7 +30,35 @@ module sk_fma #(
 
   generate
     if (IMPL == "DSP") begin : gen_dsp
-      `ifdef SYNTH_KINTEX7
+      `ifdef SYNTH_DESIGNWARE
+        wire [A_WIDTH+B_WIDTH-1:0] dw_c = sub_c_i ? -c_i : c_i;
+        wire [A_WIDTH+B_WIDTH-1:0] dw_mac_out;
+        DW02_mac #(.A_width(A_WIDTH), .B_width(B_WIDTH)) u_dw_mac (
+          .A(a_i),
+          .B(b_i),
+          .C(dw_c),
+          .TC(1'b0),
+          .MAC(dw_mac_out)
+        );
+        if (PIPELINE_STAGES == 0) begin : gen_p0
+          assign result_o = dw_mac_out[OUT_WIDTH-1:0];
+        end else if (PIPELINE_STAGES == 1) begin : gen_p1
+          reg [OUT_WIDTH-1:0] r1; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+          always @(posedge clk_i or negedge rst_ni) begin
+            if (!rst_ni) r1 <= {OUT_WIDTH{1'b0}};
+            else         r1 <= dw_mac_out[OUT_WIDTH-1:0];
+          end
+          assign result_o = r1;
+        end else begin : gen_p2
+          reg [OUT_WIDTH-1:0] r1; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+          reg [OUT_WIDTH-1:0] r2; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+          always @(posedge clk_i or negedge rst_ni) begin
+            if (!rst_ni) begin r1 <= {OUT_WIDTH{1'b0}}; r2 <= {OUT_WIDTH{1'b0}}; end
+            else         begin r1 <= dw_mac_out[OUT_WIDTH-1:0]; r2 <= r1; end
+          end
+          assign result_o = r2;
+        end
+      `elsif SYNTH_KINTEX7
       if (A_WIDTH <= 25 && B_WIDTH <= 18 && C_WIDTH <= 48 && OUT_WIDTH <= 48) begin : gen_kintex7_dsp_fma
         wire [29:0] dsp_a = {{(30-A_WIDTH){1'b0}}, a_i};
         wire [17:0] dsp_b = {{(18-B_WIDTH){1'b0}}, b_i};

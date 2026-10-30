@@ -25,7 +25,29 @@ module sk_addsub #(
 
   generate
     if (IMPL == "DSP") begin : gen_dsp
-      `ifdef SYNTH_KINTEX7
+      `ifdef SYNTH_DESIGNWARE
+      wire [WIDTH-1:0] dw_res;
+      wire             dw_co;
+      DW01_addsub #(.width(WIDTH)) u_dw_addsub (
+        .A(a_i),
+        .B(b_i),
+        .CI(1'b0),
+        .ADD_SUB(~sub_i),
+        .SUM(dw_res),
+        .CO(dw_co)
+      );
+      if (PIPELINE) begin : gen_pipe
+        reg [WIDTH-1:0] res_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg             cb_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        always @(posedge clk_i or negedge rst_ni) begin
+          if (!rst_ni) begin res_q <= {WIDTH{1'b0}}; cb_q <= 1'b0; end
+          else         begin res_q <= dw_res;        cb_q <= dw_co; end
+        end
+        assign result_o = res_q; assign carry_borrow_o = cb_q;
+      end else begin : gen_comb
+        assign result_o = dw_res; assign carry_borrow_o = dw_co;
+      end
+      `elsif SYNTH_KINTEX7
       if (WIDTH <= 48 && PIPELINE >= 1) begin : gen_kintex7_dsp
         wire [29:0] dsp_a = (WIDTH > 18) ? {{(30-(WIDTH-18)){1'b0}}, b_i[WIDTH-1:18]} : 30'd0;
         wire [17:0] dsp_b = (WIDTH > 18) ? b_i[17:0] : {{(18-WIDTH){1'b0}}, b_i};
@@ -99,6 +121,29 @@ module sk_addsub #(
       `endif
 
     end else if (IMPL == "CARRY") begin : gen_carry
+      `ifdef SYNTH_DESIGNWARE
+      wire [WIDTH-1:0] dw_res;
+      wire             dw_co;
+      DW01_addsub #(.width(WIDTH)) u_dw_addsub (
+        .A(a_i),
+        .B(b_i),
+        .CI(1'b0),
+        .ADD_SUB(~sub_i),
+        .SUM(dw_res),
+        .CO(dw_co)
+      );
+      if (PIPELINE) begin : gen_pipe
+        reg [WIDTH-1:0] res_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        reg             cb_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+        always @(posedge clk_i or negedge rst_ni) begin
+          if (!rst_ni) begin res_q <= {WIDTH{1'b0}}; cb_q <= 1'b0; end
+          else         begin res_q <= dw_res;        cb_q <= dw_co; end
+        end
+        assign result_o = res_q; assign carry_borrow_o = cb_q;
+      end else begin : gen_comb
+        assign result_o = dw_res; assign carry_borrow_o = dw_co;
+      end
+      `else
       // Uses FPGA dedicated slice carry chain (CARRY4)
       (* use_dsp = "no" *)
       wire [WIDTH-1:0] b_effective = sub_i ? ~b_i : b_i;
@@ -114,6 +159,7 @@ module sk_addsub #(
       end else begin : gen_comb
         assign result_o = carry_comb[WIDTH-1:0]; assign carry_borrow_o = carry_comb[WIDTH];
       end
+      `endif
 
     end else begin : gen_logic
       // Pure LUT Logic (ASIC standard cell / FPGA LUT gate logic)
