@@ -11,7 +11,7 @@ file mkdir $out_dir
 
 # 1. Read Design Sources
 foreach f [glob -nocomplain ../../rtl/library/*.v] {
-    if {[file tail $f] ne "sk_dsp48e1_sim.v"} {
+    if {[file tail $f] ne "sk_dsp48e1_sim.v" && [file tail $f] ne "sk_designware_sim.v"} {
         read_verilog $f
     }
 }
@@ -30,7 +30,7 @@ read_xdc ./kc705.xdc
 # 3. Run Synthesis
 synth_design -top $top -part $part \
   -include_dirs [list ../../rtl/include ../../rtl/library] \
-  -verilog_define [list SYNTH_KINTEX7=1 PADDR_WIDTH=40 L1I_WAYS=4 L1D_WAYS=4 L2_WAYS=8 L1I_SIZE_BYTES=16384 L1D_SIZE_BYTES=16384 L2_SIZE_BYTES=262144]
+  -verilog_define [list SYNTH_KINTEX7=1 SYNTH_VIVADO=1 PADDR_WIDTH=40 L1I_WAYS=4 L1D_WAYS=4 L2_WAYS=8 L1I_SIZE_BYTES=16384 L1D_SIZE_BYTES=16384 L2_SIZE_BYTES=262144]
 
 # 4. Write Checkpoint and Reports
 write_checkpoint -force $out_dir/synth.dcp

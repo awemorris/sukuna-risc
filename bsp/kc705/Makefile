@@ -11,7 +11,7 @@ VIVADO_CMD        ?= $(if $(VIVADO_SETTINGS),source $(VIVADO_SETTINGS) && LD_LIB
 
 BUILD_DIR         ?= build_kc705
 
-.PHONY: all synth clean
+.PHONY: all synth pnr clean
 
 all: synth
 
@@ -22,6 +22,13 @@ synth:
 	@echo "==> Synthesis finished. Summary reports:"
 	@grep -A 15 "1. Slice Logic" $(BUILD_DIR)/synth_utilization.rpt || true
 	@grep -A 20 "Design Timing Summary" $(BUILD_DIR)/synth_timing.rpt || true
+
+pnr:
+	@echo "==> Running P&R (Implementation) with Vivado ($(VIVADO_SETTINGS))..."
+	$(VIVADO_CMD) -mode batch -source kc705_pnr.tcl -log $(BUILD_DIR)/vivado_pnr.log -jou $(BUILD_DIR)/vivado_pnr.jou
+	@echo "==> P&R finished. Summary reports:"
+	@grep -A 15 "1. Slice Logic" $(BUILD_DIR)/route_utilization.rpt || true
+	@grep -A 20 "Design Timing Summary" $(BUILD_DIR)/route_timing.rpt || true
 
 gui:
 	$(VIVADO_CMD) -mode gui &
