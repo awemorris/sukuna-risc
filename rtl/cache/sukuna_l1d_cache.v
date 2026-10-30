@@ -130,6 +130,18 @@ module sukuna_l1d_cache #(
     end
   endgenerate
 
+  // Stage 1 -> Stage 2: 1st cycle valid resolution & pipeline latching
+  wire [WAYS-1:0] req_way_valid;
+  for (gw = 0; gw < WAYS; gw = gw + 1) begin : gen_req_way_valid
+    assign req_way_valid[gw] = way_valid_wen[gw] ? way_valid_wdata[gw][req_index] :
+                                                  way_valid_out[gw][req_index];
+  end
+  wire req_victim_valid = way_valid_wen[victim_ptr_q] ? way_valid_wdata[victim_ptr_q][req_index] :
+                                                        way_valid_out[victim_ptr_q][req_index];
+
+  reg [WAYS-1:0] pipe2_way_valid_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg            pipe2_victim_valid_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
   // 512-bit writeback data buffer instantiated via sk_ram_ff macro
   wire                       l2_wline_wen = (state_q == S_IDLE) && req_valid_q && (is_mmio || (!hit && victim_dirty));
   wire [CACHE_LINE_BITS-1:0] l2_wline_wdata = is_mmio ? {8{req_wdata_q}} : data_rdata[victim_ptr_q];
@@ -157,23 +169,29 @@ module sukuna_l1d_cache #(
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      req_valid_q   <= 1'b0;
-      req_write_q   <= 1'b0;
-      req_byte_en_q <= 8'd0;
-      req_offset_q  <= 4'd0;
-      req_tag_q     <= {TAG_WIDTH{1'b0}};
-      req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
-      req_wdata_q   <= {XLEN{1'b0}};
+      req_valid_q          <= 1'b0;
+      pipe2_way_valid_q    <= {WAYS{1'b0}};
+      pipe2_victim_valid_q <= 1'b0;
+      req_write_q          <= 1'b0;
+      req_byte_en_q        <= 8'd0;
+      req_offset_q         <= 4'd0;
+      req_tag_q            <= {TAG_WIDTH{1'b0}};
+      req_paddr_w_q        <= {(PADDR_WIDTH-2){1'b0}};
+      req_wdata_q          <= {XLEN{1'b0}};
     end else if (!is_busy) begin
-      req_valid_q   <= mem_req_valid_i;
-      req_write_q   <= mem_req_write_i;
-      req_byte_en_q <= mem_byte_en_i;
-      req_offset_q  <= req_word_offset;
-      req_tag_q     <= req_tag;
-      req_paddr_w_q <= mem_paddr_w_i;
-      req_wdata_q   <= mem_wdata_i;
+      req_valid_q          <= mem_req_valid_i;
+      pipe2_way_valid_q    <= req_way_valid;
+      pipe2_victim_valid_q <= req_victim_valid;
+      req_write_q          <= mem_req_write_i;
+      req_byte_en_q        <= mem_byte_en_i;
+      req_offset_q         <= req_word_offset;
+      req_tag_q            <= req_tag;
+      req_paddr_w_q        <= mem_paddr_w_i;
+      req_wdata_q          <= mem_wdata_i;
     end else if ((state_q == S_REFILL || state_q == S_MMIO) && l2_resp_valid_i) begin
-      req_valid_q   <= 1'b0;
+      req_valid_q          <= 1'b0;
+      pipe2_way_valid_q    <= {WAYS{1'b0}};
+      pipe2_victim_valid_q <= 1'b0;
     end
   end
 
@@ -250,7 +268,7 @@ module sukuna_l1d_cache #(
         .rdata_o(data_rdata[w])
       );
 
-      assign way_hit[w]       = req_valid_q && way_valid_out[w][req_paddr_w_q[5+INDEX_BITS:6]] &&
+      assign way_hit[w]       = req_valid_q && pipe2_way_valid_q[w] &&
                                 (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
       assign snoop_way_hit[w] = way_valid_out[w][snoop_index] &&
                                 (tag_rdata[w][TAG_WIDTH-1:0] == snoop_tag);
@@ -284,12 +302,12 @@ module sukuna_l1d_cache #(
   assign mem_req_ready_o  = !is_busy;
   assign mem_resp_valid_o = (hit && !is_busy) || refill_done || mmio_done;
   assign mem_rdata_o      = mmio_done ? l2_rline_data_i[XLEN-1:0] : eff_dword;
-  assign mem_miss_stall_o = ((req_valid_q && !hit) || is_busy) && !refill_done && !mmio_done;
+  assign mem_miss_stall_o = (state_q != S_IDLE) && !refill_done && !mmio_done;
 
   // --------------------------------------------------------------------------
   // Eviction & Refill State Machine
   // --------------------------------------------------------------------------
-  wire victim_dirty = way_valid_out[victim_ptr_q][req_paddr_w_q[5+INDEX_BITS:6]] &&
+  wire victim_dirty = pipe2_victim_valid_q &&
                       (tag_rdata[victim_ptr_q][TAG_WIDTH+1] == 1'b1);
   wire [TAG_WIDTH-1:0] victim_tag = tag_rdata[victim_ptr_q][TAG_WIDTH-1:0];
 

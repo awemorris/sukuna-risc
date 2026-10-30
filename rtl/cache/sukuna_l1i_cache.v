@@ -114,44 +114,59 @@ module sukuna_l1i_cache #(
   reg                    pending_flush_req_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]  pending_paddr_w_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
+  wire [INDEX_BITS-1:0]  look_index = (pending_flush_req_q && !miss_busy_q) ? pending_paddr_w_q[5+INDEX_BITS:6] : req_index;
+  wire [WAYS-1:0]        req_way_valid;
+  for (gw = 0; gw < WAYS; gw = gw + 1) begin : gen_req_way_valid
+    assign req_way_valid[gw] = fence_i_flush_i ? 1'b0 :
+                               way_valid_wen[gw] ? way_valid_wdata[gw][look_index] :
+                                                   way_valid_out[gw][look_index];
+  end
+  reg [WAYS-1:0]         pipe2_way_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      req_valid_q   <= 1'b0;
-      req_offset_q  <= 4'd0;
-      req_index_q   <= {INDEX_BITS{1'b0}};
-      req_tag_q     <= {TAG_WIDTH{1'b0}};
-      req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
+      req_valid_q       <= 1'b0;
+      pipe2_way_valid_q <= {WAYS{1'b0}};
+      req_offset_q      <= 4'd0;
+      req_index_q       <= {INDEX_BITS{1'b0}};
+      req_tag_q         <= {TAG_WIDTH{1'b0}};
+      req_paddr_w_q     <= {(PADDR_WIDTH-2){1'b0}};
     end else begin
       if (flush_i) begin
         if (miss_busy_q && (fetch_paddr_w_i[PADDR_WIDTH-1:6] == req_paddr_w_q[PADDR_WIDTH-1:6])) begin
           // Same cache line in-flight refill: update word offset to redirect target
-          req_offset_q  <= req_word_offset;
-          req_paddr_w_q <= fetch_paddr_w_i;
-          req_valid_q   <= 1'b1;
+          req_offset_q      <= req_word_offset;
+          req_paddr_w_q     <= fetch_paddr_w_i;
+          req_valid_q       <= 1'b1;
+          pipe2_way_valid_q <= req_way_valid;
         end else if (miss_busy_q) begin
           // Flush to different line while refilling: invalidate pipeline request
-          req_valid_q   <= 1'b0;
+          req_valid_q       <= 1'b0;
+          pipe2_way_valid_q <= {WAYS{1'b0}};
         end else begin
           // Not currently refilling: evaluate redirect target immediately
-          req_valid_q   <= 1'b1;
-          req_offset_q  <= req_word_offset;
-          req_index_q   <= req_index;
-          req_tag_q     <= req_tag;
-          req_paddr_w_q <= fetch_paddr_w_i;
+          req_valid_q       <= 1'b1;
+          pipe2_way_valid_q <= req_way_valid;
+          req_offset_q      <= req_word_offset;
+          req_index_q       <= req_index;
+          req_tag_q         <= req_tag;
+          req_paddr_w_q     <= fetch_paddr_w_i;
         end
       end else if (pending_flush_req_q && !miss_busy_q) begin
         // Servicing pending redirect request after previous refill completed
-        req_valid_q   <= 1'b1;
-        req_offset_q  <= pending_paddr_w_q[5:2];
-        req_index_q   <= pending_paddr_w_q[5+INDEX_BITS:6];
-        req_tag_q     <= pending_paddr_w_q[PADDR_WIDTH-1:6+INDEX_BITS];
-        req_paddr_w_q <= pending_paddr_w_q;
+        req_valid_q       <= 1'b1;
+        pipe2_way_valid_q <= req_way_valid;
+        req_offset_q      <= pending_paddr_w_q[5:2];
+        req_index_q       <= pending_paddr_w_q[5+INDEX_BITS:6];
+        req_tag_q         <= pending_paddr_w_q[PADDR_WIDTH-1:6+INDEX_BITS];
+        req_paddr_w_q     <= pending_paddr_w_q;
       end else if (!fetch_miss_o) begin
-        req_valid_q   <= fetch_req_valid_i && !stall_i;
-        req_offset_q  <= req_word_offset;
-        req_index_q   <= req_index;
-        req_tag_q     <= req_tag;
-        req_paddr_w_q <= fetch_paddr_w_i;
+        req_valid_q       <= fetch_req_valid_i && !stall_i;
+        pipe2_way_valid_q <= req_way_valid;
+        req_offset_q      <= req_word_offset;
+        req_index_q       <= req_index;
+        req_tag_q         <= req_tag;
+        req_paddr_w_q     <= fetch_paddr_w_i;
       end
     end
   end
@@ -216,7 +231,7 @@ module sukuna_l1i_cache #(
       );
 
       // Hit comparison for way w
-      assign way_hit[w] = req_valid_q && way_valid_out[w][req_index_q] &&
+      assign way_hit[w] = req_valid_q && pipe2_way_valid_q[w] &&
                           (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
     end
   endgenerate
