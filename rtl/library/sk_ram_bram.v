@@ -71,33 +71,48 @@ module sk_ram_bram #(
     end
   endgenerate
 
-  // Synchronous Read (Stage 1 with WRITE_FIRST forwarding)
+  // Forwarding register for simultaneous read/write collision
+  reg                   fwd_hit_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [DATA_WIDTH-1:0]  fwd_data_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [DATA_WIDTH-1:0]  fwd_mask_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
   integer bi;
-  always @(posedge clk_i) begin
-    if (ren_i) begin
-      if (wen_i && (waddr_i == raddr_i)) begin
-        if (BYTE_WRITE_EN) begin
-          for (bi = 0; bi < WE_WIDTH; bi = bi + 1) begin
-            rdata_pipe_q[bi*8 +: 8] <= wstrb_i[bi] ? wdata_i[bi*8 +: 8] : mem[raddr_i][bi*8 +: 8];
-          end
-        end else begin
-          rdata_pipe_q <= wdata_i;
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      fwd_hit_q  <= 1'b0;
+      fwd_data_q <= {DATA_WIDTH{1'b0}};
+      fwd_mask_q <= {DATA_WIDTH{1'b0}};
+    end else begin
+      fwd_hit_q  <= ren_i && wen_i && (waddr_i == raddr_i);
+      fwd_data_q <= wdata_i;
+      if (BYTE_WRITE_EN) begin
+        for (bi = 0; bi < WE_WIDTH; bi = bi + 1) begin
+          fwd_mask_q[bi*8 +: 8] <= {8{wstrb_i[bi]}};
         end
       end else begin
-        rdata_pipe_q <= mem[raddr_i];
+        fwd_mask_q <= {DATA_WIDTH{1'b1}};
       end
     end
   end
+
+  // Synchronous Read (Standard Xilinx BRAM inference template)
+  always @(posedge clk_i) begin
+    if (ren_i) begin
+      rdata_pipe_q <= mem[raddr_i];
+    end
+  end
+
+  wire [DATA_WIDTH-1:0] rdata_eff = fwd_hit_q ? ((fwd_data_q & fwd_mask_q) | (rdata_pipe_q & ~fwd_mask_q)) : rdata_pipe_q;
 
   // Optional Pipeline Stage 2
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       rdata_out_q <= {DATA_WIDTH{1'b0}};
     end else begin
-      rdata_out_q <= rdata_pipe_q;
+      rdata_out_q <= rdata_eff;
     end
   end
 
-  assign rdata_o = (PIPELINE_STAGES >= 2) ? rdata_out_q : rdata_pipe_q;
+  assign rdata_o = (PIPELINE_STAGES >= 2) ? rdata_out_q : rdata_eff;
 
 endmodule
