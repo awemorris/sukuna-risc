@@ -39,6 +39,11 @@ module sukuna_int_eu #(
   output reg  [4:0]      rd_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg  [XLEN-1:0] result_o,  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
+  // Combinational result for zero-cycle EX bypass to ID3
+  output wire            comb_valid_o,
+  output wire [4:0]      comb_rd_o,
+  output wire [XLEN-1:0] comb_result_o,
+
   // Comparison flags for branch resolution
   output wire            cmp_eq_o,
   output wire            cmp_lt_o,
@@ -255,6 +260,10 @@ module sukuna_int_eu #(
   wire [XLEN-1:0] div_final_res = div_word_q ? {{32{div_res_raw[31]}}, div_res_raw[31:0]} : div_res_raw;
   wire [XLEN-1:0] mul_raw_res   = mul_high_q ? mul_full_prod[127:64] : mul_full_prod[63:0];
   wire [XLEN-1:0] mul_final_res = mul_word_q ? {{32{mul_raw_res[31]}}, mul_raw_res[31:0]} : mul_raw_res;
+
+  assign comb_valid_o  = valid_i && !is_mul_any && !is_div_op;
+  assign comb_rd_o     = rd_i;
+  assign comb_result_o = final_alu_res;
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin

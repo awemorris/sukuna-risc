@@ -46,7 +46,7 @@ module sk_div #(
   reg               neg_rem_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // Next-step trial subtraction (single 64-bit adder, ~0.8 ns)
-  wire [WIDTH:0] next_acc_trial = {acc_q[WIDTH-2:0], quo_q[WIDTH-1]};
+  wire [WIDTH:0] next_acc_trial = {acc_q[WIDTH-1:0], quo_q[WIDTH-1]};
   wire [WIDTH:0] sub_res = next_acc_trial - {1'b0, div_q};
   wire           sub_ok  = ~sub_res[WIDTH];
 

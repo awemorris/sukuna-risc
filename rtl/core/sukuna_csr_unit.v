@@ -163,7 +163,7 @@ module sukuna_csr_unit #(
 
       // Machine-mode CSRs
       12'h300: csr_rdata_o = mstatus_q;
-      12'h301: csr_rdata_o = 64'h80000000_0014112D; // RV64IMAFDCSU
+      12'h301: csr_rdata_o = 64'h80000000_00141129; // RV64IMAFDSU (RV64G)
       12'h302: csr_rdata_o = {{(XLEN-16){1'b0}}, medeleg_q};
       12'h303: csr_rdata_o = {{(XLEN-16){1'b0}}, mideleg_q};
       12'h304: csr_rdata_o = mie_wire;

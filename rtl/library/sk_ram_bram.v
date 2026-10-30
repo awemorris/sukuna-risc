@@ -71,10 +71,21 @@ module sk_ram_bram #(
     end
   endgenerate
 
-  // Synchronous Read (Stage 1)
+  // Synchronous Read (Stage 1 with WRITE_FIRST forwarding)
+  integer bi;
   always @(posedge clk_i) begin
     if (ren_i) begin
-      rdata_pipe_q <= mem[raddr_i];
+      if (wen_i && (waddr_i == raddr_i)) begin
+        if (BYTE_WRITE_EN) begin
+          for (bi = 0; bi < WE_WIDTH; bi = bi + 1) begin
+            rdata_pipe_q[bi*8 +: 8] <= wstrb_i[bi] ? wdata_i[bi*8 +: 8] : mem[raddr_i][bi*8 +: 8];
+          end
+        end else begin
+          rdata_pipe_q <= wdata_i;
+        end
+      end else begin
+        rdata_pipe_q <= mem[raddr_i];
+      end
     end
   end
 

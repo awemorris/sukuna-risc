@@ -31,6 +31,13 @@ module sk_ram_dist #(
 
   (* ram_style = "distributed" *) reg [DATA_WIDTH-1:0] mem [0:DEPTH-1]; /* synthesis syn_ramstyle = "select_ram" */
 
+  integer init_i;
+  initial begin
+    for (init_i = 0; init_i < DEPTH; init_i = init_i + 1) begin
+      mem[init_i] = {DATA_WIDTH{1'b0}};
+    end
+  end
+
   // Synchronous Write
   always @(posedge clk_i) begin
     if (wen_i) begin
@@ -38,12 +45,12 @@ module sk_ram_dist #(
     end
   end
 
-  // Synchronous Read (1 cycle latency)
+  // Synchronous Read (1 cycle latency with write forwarding)
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       rdata_o <= {DATA_WIDTH{1'b0}};
     end else if (ren_i) begin
-      rdata_o <= mem[raddr_i];
+      rdata_o <= (wen_i && (waddr_i == raddr_i)) ? wdata_i : mem[raddr_i];
     end
   end
 
