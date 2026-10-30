@@ -106,7 +106,7 @@ module sukuna_thread_pipe #(
   wire stall_l1i, stall_if1, stall_if2, stall_id1, stall_id2, stall_id3, stall_ex;
   assign l1i_stall_o = stall_l1i || wfi_sleep;
   wire flush_if1, flush_if2, flush_id1, flush_id2, flush_id3, flush_ex;
-  assign l1i_flush_o = flush_if1;
+  assign l1i_flush_o = sync_flush_if1;
   wire ex_stall;
   wire [1:0] fetch_step;
   wire       id1_hold_slot1;
@@ -268,10 +268,41 @@ module sukuna_thread_pipe #(
   wire            wb_wfi_valid;
   wire            wb_sfence_valid;
 
-  // Branch & Mispredict Redirection
+  // Branch & Mispredict Redirection wires from EX
   wire            branch_mispredict;
   wire [XLEN-1:0] branch_target;
-  wire [XLEN-1:0] if1_redirect_pc = trap_flush ? trap_target_pc : branch_target;
+
+  // --------------------------------------------------------------------------
+  // Synchronous Redirection & Forward Flow Control Pipeline Registers
+  // --------------------------------------------------------------------------
+  // Latch branch mispredict and trap flush from EX/WB into clean registers
+  // to break the 40+ level combinational loop back to IF1/L1I/ITLB
+  reg            redirect_valid_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0] redirect_pc_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      redirect_valid_q <= 1'b0;
+      redirect_pc_q    <= {XLEN{1'b0}};
+    end else begin
+      if (trap_flush) begin
+        redirect_valid_q <= 1'b1;
+        redirect_pc_q    <= trap_target_pc;
+      end else if (branch_mispredict) begin
+        redirect_valid_q <= 1'b1;
+        redirect_pc_q    <= branch_target;
+      end else begin
+        redirect_valid_q <= 1'b0;
+      end
+    end
+  end
+
+  // Synchronous redirect driven strictly from register
+  wire [XLEN-1:0] if1_redirect_pc = redirect_pc_q;
+  wire            sync_flush_if1  = redirect_valid_q;
+
+  // IF2 must be flushed on both Cycle N (immediate squash) and Cycle N+1 (while IF1 fetches target)
+  wire            flush_if2_combined = flush_if2 || redirect_valid_q;
 
   // --------------------------------------------------------------------------
   // Stage 1: IF1
@@ -286,7 +317,7 @@ module sukuna_thread_pipe #(
     .clk_i            (clk_i),
     .rst_ni           (rst_ni),
     .stall_i          (stall_if1),
-    .flush_i          (flush_if1),
+    .flush_i          (sync_flush_if1),
     .redirect_pc_i    (if1_redirect_pc),
     .wfi_sleep_i      (wfi_sleep),
     .itlb_req_valid_o (itlb_req_valid_o),
@@ -312,7 +343,7 @@ module sukuna_thread_pipe #(
     .clk_i            (clk_i),
     .rst_ni           (rst_ni),
     .stall_i          (stall_if2),
-    .flush_i          (flush_if2),
+    .flush_i          (flush_if2_combined),
     .consume_step_i   (fetch_step),
     .if1_valid_i      (if1_valid),
     .if1_pc_i         (if1_pc),
