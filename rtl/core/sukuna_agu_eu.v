@@ -243,18 +243,26 @@ module sukuna_agu_eu #(
 
   // Response Signals to WB
   wire sc_fail_resp_valid = (agu_state_q == S_AGU_IDLE) && sc_failed_q;
-  wire store_resp_valid   = (agu_state_q == S_AGU_STORE) && l1d_resp_valid_i;
+  reg  store_resp_valid_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      store_resp_valid_q <= 1'b0;
+    end else begin
+      store_resp_valid_q <= (agu_state_q == S_AGU_STORE) && l1d_resp_valid_i;
+    end
+  end
 
-  assign resp_valid_o = buf_valid_q || sc_fail_resp_valid || store_resp_valid;
+  assign resp_valid_o = buf_valid_q || sc_fail_resp_valid || store_resp_valid_q;
 
   assign resp_rd_o    = buf_valid_q         ? buf_rd_q :
                         sc_fail_resp_valid  ? s1_rd_q  : s2_rd_q;
   assign resp_rdata_o = buf_valid_q         ? formatted_rdata :
                         sc_fail_resp_valid  ? 64'd1 :
-                        (agu_state_q == S_AGU_STORE && sc_success_q) ? 64'd0 : amo_rdata_q;
+                        sc_success_q        ? 64'd0 : amo_rdata_q;
 
   // Unit Busy Signal: High while any stage holds valid operations or waiting for cache/amo
-  assign busy_o = ((s1_valid_q || s2_valid_q || agu_state_q != S_AGU_IDLE || sc_failed_q) && !resp_valid_o) || l1d_miss_stall_i;
+  // Driven strictly by registered state flags to prevent combinational feedthrough
+  assign busy_o = s1_valid_q || s2_valid_q || (agu_state_q != S_AGU_IDLE) || sc_failed_q || l1d_miss_stall_i;
 
   // --------------------------------------------------------------------------
   // Sequential Pipeline State Update
