@@ -170,7 +170,7 @@ Importantly, this low logic depth is **not intended to chase extreme, hot gigahe
 | **Target OS** | **zedBSD** | End-to-end vertically co-designed hardware/software stack |
 | **Architecture** | RISC-V RV64G | `RV64IMAFD` + `Zicsr` + `Zifencei`, pure 32-bit fixed-length |
 | **Hardware Threads** | 3-way SMT (1 Core / 3 Harts) | Hart 0: Kernel/Drivers/Display, Hart 1: Foreground UI, Hart 2: Background |
-| **Pipeline** | 9-stage In-Order | `IF1 -> IF2 -> ID1 -> ID2 -> ID3 -> EX (INT 1-stage/MEM 3-stage/FP N-stage) -> WB` |
+| **Pipeline** | 7-13-stage In-Order | `IF1 -> IF2 -> ID1 -> ID2 -> ID3 -> EX (INT 1-stage/MEM 3-stage/FP N-stage) -> WB` |
 | **Issue Logic** | Asymmetric Dual-Issue | Fixed-lane (`Lane 0: Older`, `Lane 1: Younger`) with EX enable steering |
 | **Co-Issue Pairs** | `INT + MA` / `MA + INT` | Supported when no RAW/WAW hazard and MA is not stalled |
 | **L1 Instruction Cache** | 48 KB total (16 KB / thread) | Dedicated per thread, 4-way set-associative, word-addressed |
