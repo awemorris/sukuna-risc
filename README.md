@@ -51,18 +51,18 @@ instruction set.
   - **Hart 1 (T2: Foreground)**: High-priority interactive application main thread.
   - **Hart 2 (T3: Background)**: Background services, batch workers, and auxiliary threads.
 - **Pipeline Depth**: 7-stage in-order pipeline per thread:
-  $$\text{IF1} \longrightarrow \text{IF2} \longrightarrow \text{ID1} \longrightarrow \text{ID2} \longrightarrow \text{ID3} \longrightarrow \text{EX} \longrightarrow \text{WB}$$
+  `IF1 -> IF2 -> ID1 -> ID2 -> ID3 -> EX -> WB`
 - **Issue Mechanism**: Fixed-lane asymmetric dual-issue with execution unit enable steering:
   - **Lane 0 (Older)**: Carries the older instruction in program order (`inst0`).
   - **Lane 1 (Younger)**: Carries the younger instruction in program order (`inst1`).
   - **EX Enable Steering**: Execution units (INT-EU, MA-EU) accept inputs from both lanes without datapath swap multiplexers.
   - **Dual-Issue Pairs**: `INT + MA` or `MA + INT` (when no RAW/WAW hazard exists and MA-EU is not stalled).
 - **Cache Hierarchy**:
-  - Parameterized $N$-way set-associative ($2 \le N \le 32$).
+  - Parameterized N-way set-associative (2 <= N <= 32).
   - **L1 Instruction Cache (L1I)**: 48 KB total (16 KB dedicated per thread, default 4-way set-associative).
   - **L1 Data Cache (L1D)**: 48 KB total (16 KB dedicated per thread, default 4-way set-associative, byte-write strobe enabled).
   - **Shared L2 Cache**: 256 KB unified (shared across all threads, default 8-way set-associative).
-  - **Physical Address Width (`PADDR_WIDTH`)**: Configurable 32-bit to 40-bit. Dynamic tag width calculation ($\text{TAG\_WIDTH} = \text{PADDR\_WIDTH} - \text{INDEX\_BITS} - 6$).
+  - **Physical Address Width (`PADDR_WIDTH`)**: Configurable 32-bit to 40-bit. Dynamic tag width calculation (`TAG_WIDTH = PADDR_WIDTH - INDEX_BITS - 6`).
   - **Word-Aligned Interconnect**: Dropping lower 2 bits (`[PADDR_WIDTH-1:2]`) across internal bus and memory interfaces.
 - **Memory Management Unit (MMU)**:
   - **L1-ITLB**: 8 entries dedicated per thread, 1-cycle latency.
@@ -70,7 +70,7 @@ instruction set.
   - **Shared L2-TLB**: 256 entries unified.
   - **Hardware Page Table Walker (PTW)**: Sv39 hardware page table walker.
 - **Target Performance & Operating Frequencies**:
-  - **5nm ASIC**: 1.5 GHz - 1.7 GHz ($T_{\text{clk}} = 667\,\text{ps}$).
+  - **5nm ASIC**: 1.5 GHz - 1.7 GHz (Tclk = 667 ps).
   - **AMD/Xilinx Kintex-7 FPGA (-2)**: > 200 MHz sustained (204.12 MHz achieved on KC705).
   - **Resource Footprint (KC705)**: 105.9k LUTs, 47.8k FFs, 4 BRAM tiles, 48 DSP slices (core level).
 
@@ -84,10 +84,10 @@ In a high-frequency processor with well-provisioned L1/L2 caches and wide interc
 
 1. **Variable-Length Boundary Detection**: Dynamically identifying variable 16-bit vs. 32-bit instruction boundaries at arbitrary 2-byte granularities creates deep logic chains.
 2. **Cross-Boundary Instruction Reassembly**: Multi-entry fetch buffers are required to reconstruct instructions that straddle 64-bit cache line boundaries.
-3. **Dynamic Shifting & Speculative Decompression for Dual-Issue**: The starting byte position of the second instruction dynamically depends on the length of the first instruction, requiring parallel speculative decompression trees ($C_2$ vs. $C_4$ candidates) and wide multiplexing trees.
+3. **Dynamic Shifting & Speculative Decompression for Dual-Issue**: The starting byte position of the second instruction dynamically depends on the length of the first instruction, requiring parallel speculative decompression trees (C2 vs. C4 candidates) and wide multiplexing trees.
 4. **Misaligned Instruction Exceptions**: Complex handling for non-4-byte-aligned branch targets and trap vectors.
 
-These factors concentrate logic complexity and wiring congestion directly into the instruction fetch (IF) stages, becoming the primary bottleneck that degrades maximum operating frequency ($F_{\max}$).
+These factors concentrate logic complexity and wiring congestion directly into the instruction fetch (IF) stages, becoming the primary bottleneck that degrades maximum operating frequency (Fmax).
 
 By decisively committing to **RV64G (pure 32-bit fixed-length instructions) and eliminating RVC**:
 
@@ -129,7 +129,7 @@ Sukuna-RISC preserves physical instruction order straight through the pipeline:
 #### Natural Precise Exception Guarantee
 Because Lane 0 is strictly older and Lane 1 is strictly younger:
 - If the leading Lane 0 instruction triggers an exception (e.g., page fault on load/store), Lane 1 commit is squashed by trivial gating:
-  $$\text{if (lane0\_exception)} \quad \text{commit\_lane1} = 0$$
+  `if (lane0_exception) commit_lane1 = 0;`
 - No complex reorder buffers, speculative rename tables, or swap-tracking tags are required.
 
 ---
@@ -137,7 +137,7 @@ Because Lane 0 is strictly older and Lane 1 is strictly younger:
 ### 3.2 Pipeline Stage Responsibilities
 
 #### ① IF1 (Instruction Fetch 1)
-- **PC Generation**: Selects the next fetch PC among branch prediction targets, trap/exception vectors, or sequential increment ($+4$ / $+8$).
+- **PC Generation**: Selects the next fetch PC among branch prediction targets, trap/exception vectors, or sequential increment (+4 / +8).
 - **L1-ITLB & Cache Request**: Initiates 1-cycle L1-ITLB virtual-to-physical address translation and drives L1I cache tag and data arrays.
 
 #### ② IF2 (Instruction Fetch 2)
@@ -147,7 +147,7 @@ Because Lane 0 is strictly older and Lane 1 is strictly younger:
 #### ③ ID1 (Instruction Decode 1) — Zero-MUX Register File Addressing
 - **Fixed-Field Unconditional Register Fetch**:
   - In RISC-V, source register indices occupy fixed bit positions across all instruction formats:
-    $$\text{rs1} = \text{inst}[19:15], \quad \text{rs2} = \text{inst}[24:20]$$
+    `rs1 = inst[19:15]`, `rs2 = inst[24:20]`
   - Instead of waiting for instruction decode, instruction bits are wired directly to the register file read address ports:
     - Port A / Port B: Lane 0 (`inst0[19:15]`, `inst0[24:20]`)
     - Port C / Port D: Lane 1 (`inst1[19:15]`, `inst1[24:20]`)
@@ -159,8 +159,8 @@ Because Lane 0 is strictly older and Lane 1 is strictly younger:
 - **Concurrent Hazard & Issue Logic**: In parallel with RAM read-out, 5-bit comparators evaluate RAW and WAW dependencies between `inst0` and `inst1`:
   - `inst0 = INT, inst1 = MA`: Checked for RAW (`inst1.rs != inst0.rd`).
   - `inst0 = MA, inst1 = INT`: Checked for RAW (`inst1.rs != inst0.rd`) and WAW (`inst1.rd != inst0.rd`).
-- **Suppression of MEM $\to$ INT Dual-Issue**:
-  - MA instructions require 3 cycles (ADDR $\to$ MA1 $\to$ MA2).
+- **Suppression of MEM -> INT Dual-Issue**:
+  - MA instructions require 3 cycles (ADDR -> MA1 -> MA2).
   - If a subsequent INT depends on the load result, co-issuing them would require selectively stalling only the INT-EU inside EX while routing a dedicated bypass from L1D output to ALU input.
   - To prevent routing congestion and timing failure at 1.5 GHz, **co-issue is strictly prohibited when younger INT depends on older MEM**. The INT instruction is held in ID2 with a half-width bubble injected on Lane 1, issuing normally on the subsequent cycle.
 
@@ -185,7 +185,7 @@ Because Lane 0 is strictly older and Lane 1 is strictly younger:
 
 ### 3.3 Zero-MUX Even-Aligned Fetch & Non-Shifting Issue
 
-At 1.5 GHz ($T_{\text{clk}} = 667\,\text{ps}$), a single 2:1 multiplexer on a 32-bit bus incurs $30 \sim 50\,\text{ps}$ of delay ($5 \sim 8\%$ of the clock cycle). Sukuna-RISC eliminates all datapath multiplexers in the front-end using **Write-Enable (WEN) freeze control**:
+At 1.5 GHz (Tclk = 667 ps), a single 2:1 multiplexer on a 32-bit bus incurs 30 to 50 ps of delay (5% to 8% of the clock cycle). Sukuna-RISC eliminates all datapath multiplexers in the front-end using **Write-Enable (WEN) freeze control**:
 
 ```
 [ Cycle 1: Instruction AAA issues single; BBB held ]
@@ -212,7 +212,7 @@ When instructions are placed with younger `CCC` in Slot 0 and older `BBB` in Slo
 - If independent, they co-issue in parallel without physical swapping. If dependent, IF1/IF2 stalls 1 cycle while `BBB` issues first.
 
 #### FMA Dual-Slot Occupancy
-Fused Multiply-Add (`FMA`: $rs1 \times rs2 \pm rs3$) requires three source operands. Rather than adding an expensive 3rd read port (3R1W) to the Floating-Point Register file (FPR), an FMA instruction **occupies both Slot 0 and Slot 1 simultaneously**:
+Fused Multiply-Add (`FMA`: `rs1 * rs2 +/- rs3`) requires three source operands. Rather than adding an expensive 3rd read port (3R1W) to the Floating-Point Register file (FPR), an FMA instruction **occupies both Slot 0 and Slot 1 simultaneously**:
 
 ```
 Slot 0 (Lane 0): FMA Opcode ──> Reads rs1_0, rs2_0 (Supplies rs1, rs2)
@@ -229,13 +229,13 @@ Slot 1 (Lane 1): (Co-opted)  ──> Reads rs1_1       (Supplies rs3!)
 
 ### 3.4 ASIC 1.5 GHz Timing Budget & Logic Distribution
 
-To ensure timing closure at 1.5 GHz ($T_{\text{clk}} = 667\,\text{ps}$), combinational logic depth between pipeline registers is capped at **2 to 3 complex gate levels** (6 to 8 inverter/NAND delays equivalent):
+To ensure timing closure at 1.5 GHz (Tclk = 667 ps), combinational logic depth between pipeline registers is capped at **2 to 3 complex gate levels** (6 to 8 inverter/NAND delays equivalent):
 
 | Component | Budget Allocation | Description |
 | :--- | :---: | :--- |
-| **Clock & Flop Overhead** | $\approx 200\,\text{ps}$ | $T_{\text{cq}} + T_{\text{setup}} + \text{Clock Skew/Jitter} + \text{OCV Margin}$ |
-| **Wire & Interconnect Margin** | $\approx 200\,\text{ps}$ | Global macro routing and intra-cell RC parasitic delay |
-| **Net Combinational Budget** | $\approx 250\,\text{ps}$ | Usable logic delay (2–3 gate levels per stage) |
+| **Clock & Flop Overhead** | ~200 ps | `Tcq + Tsetup + Clock Skew/Jitter + OCV Margin` |
+| **Wire & Interconnect Margin** | ~200 ps | Global macro routing and intra-cell RC parasitic delay |
+| **Net Combinational Budget** | ~250 ps | Usable logic delay (2 to 3 gate levels per stage) |
 
 #### ID1 / ID2 / ID3 Stage Balancing
 | Stage | Key Operations | Gate Levels | Design Optimization |
@@ -277,16 +277,16 @@ EX Memory Stall     Load-Use Hazard         Half-Width Bubble       [MA, INT] Sk
 
 ### Pattern 2: Load-Use Data Hazard (1-Cycle Bubble Insertion)
 - **Trigger**: An instruction immediately following a load references the loaded destination register `rd`.
-- **Action**: Because MA requires 2 cycles (ADDR $\to$ MA/L1D read) before data can be forwarded:
+- **Action**: Because MA requires 2 cycles (ADDR -> MA/L1D read) before data can be forwarded:
   - `ID1` and `IF` stages are stalled for 1 cycle.
-  - A **1-cycle bubble (`valid = 0`)** is injected into `ID2/ID3` $\to$ `EX`.
+  - A **1-cycle bubble (`valid = 0`)** is injected into `ID2/ID3` -> `EX`.
 
 ### Pattern 3: Incompatible Pair or Intra-Pair RAW/WAW Hazard (Half-Width Bubble)
 - **Trigger**: Non-dual-issuable pairs (`INT + INT`, `MA + MA`), intra-pair RAW/WAW hazards, or younger INT depending on older MEM.
 - **Action**:
   - `inst0` issues alone on **Lane 0**.
   - **Lane 1 receives a bubble (`valid = 0`)**.
-  - Fetch PC increments by $+4$, and `inst1` carries over to become `inst0` on the next cycle.
+  - Fetch PC increments by +4, and `inst1` carries over to become `inst0` on the next cycle.
 
 ### Pattern 4: `[MA, INT]` Commit Skew Wait (Precise Exception Guarantee)
 - **Trigger**: Independent `[MA, INT]` dual-issue pair (Lane 0 = MA [2 cycles], Lane 1 = INT [1 cycle]).
@@ -317,7 +317,7 @@ EX Memory Stall     Load-Use Hazard         Half-Width Bubble       [MA, INT] Sk
 | **INT** | **INT** | Incompatible pair | `inst0` (INT) | Bubble (`valid=0`) | `int_en_l0 = 1` | 0 | 1 |
 | **MA** | **MA** | Incompatible pair | `inst0` (MA) | Bubble (`valid=0`) | 0 | `ma_en_l0 = 1` | 1 |
 | **INT / MA** | **FP / SIMD** | Shared EU available | `inst0` | `inst1` (FP/SIMD) | `int/ma_en_l0` | Shared Enable | 2 |
-| **Hazard** | **Hazard** | RAW/WAW conflict (esp. MEM $\to$ INT) | `inst0` | Bubble (`valid=0`) | - | - | 1 |
+| **Hazard** | **Hazard** | RAW/WAW conflict (esp. MEM -> INT) | `inst0` | Bubble (`valid=0`) | - | - | 1 |
 
 ---
 
@@ -512,7 +512,7 @@ To guarantee architectural consistency, system instructions obey strict issue in
    - `ID2` suppresses `can_dual`, injecting a half-width bubble (`valid = 0`) into Lane 1.
    - Fetch consumes exactly 1 instruction (`consume_step = 1`), preserving the trailing instruction for next-cycle fetch into Lane 0.
 2. **Commit-Stage Write Separation (Zero Speculative State Corruption)**:
-   - **EX Stage**: Combinational read of CSR registers (`csr_raddr` $\to$ `csr_rdata`) and privilege verification (`csr_illegal`).
+   - **EX Stage**: Combinational read of CSR registers (`csr_raddr` -> `csr_rdata`) and privilege verification (`csr_illegal`).
    - **WB Stage**: Modifications to CSR state (`csr_commit_wen`) occur strictly upon commit when no preceding exception exists.
 
 ---
@@ -534,12 +534,12 @@ To guarantee architectural consistency, system instructions obey strict issue in
 
 ## 7. Synthesis & Timing Benchmark Results
 
-The design has been verified and benchmarked under Out-Of-Context (OOC) logic synthesis using **AMD/Xilinx Vivado 2026.1** targeting the **Kintex-7 KC705** (`xc7k325tffg900-2`) evaluation board at a reference clock of **200.00 MHz ($T_{\text{clk}} = 5.000\,\text{ns}$)**:
+The design has been verified and benchmarked under Out-Of-Context (OOC) logic synthesis using **AMD/Xilinx Vivado 2026.1** targeting the **Kintex-7 KC705** (`xc7k325tffg900-2`) evaluation board at a reference clock of **200.00 MHz (Tclk = 5.000 ns)**:
 
 - **Top-Level SoC (`sukuna_top`)**: **204.12 MHz** (Slack: **+0.101 ns**, 195.6k LUTs, 65.0k FFs, 4 BRAMs, 48 DSPs) — **PASSED**
 - **CPU Core (`sukuna_core`)**: **203.87 MHz** (Slack: **+0.095 ns**, 105.9k LUTs, 47.8k FFs, 4 BRAMs, 48 DSPs) — **PASSED**
-- **Sequential Pipeline Modules**: **30 / 30 modules (100%) meet timing $\ge$ 200 MHz**.
-- **Combinational Logic Blocks**: Evaluated under 5.0 ns virtual clocking; all critical paths exhibit propagation delays under $3.81\,\text{ns}$ (equivalent to $> 260\,\text{MHz}$), well within the 1-cycle timing envelope.
+- **Sequential Pipeline Modules**: **30 / 30 modules (100%) meet timing >= 200 MHz**.
+- **Combinational Logic Blocks**: Evaluated under 5.0 ns virtual clocking; all critical paths exhibit propagation delays under 3.81 ns (equivalent to > 260 MHz), well within the 1-cycle timing envelope.
 
 | Module | Category | Type | Fmax (MHz) | Data Path Delay (ns) | Slack (ns) | Slice LUTs | Slice FFs | Status |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
