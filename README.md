@@ -1,109 +1,176 @@
 Sukuna-RISC
 ===========
 
-`Sukuna-RISC` is a zlib-licensed RTL for a high-frequency 64-bit
-RISC-V processor core implemented in Verilog 2025.
-
-This project is a part of [zedBSD](https://github.com/awemorris/zedBSD)
-and the CPU is intended for use with zedBSD.
+Sukuna-RISC is a CPU for the [zedBSD](https://github.com/awemorris/zedBSD)
+project.  It is an area- and energy-efficient 64-bit RISC-V processor core
+implemented in Verilog 2025.
 
 The name Sukuna comes from Sukunahikona, literally meaning "Small
 Genius," with a double meaning of "reduced" of RISC.
 
+zedBSD achieves exceptional efficiency and responsiveness by
+vertically optimizing the entire software stack from bottom to top,
+including the kernel, direct GPU drivers, system services, Wayland
+compositor, and desktop applications.  Because this end-to-end
+integration completely eliminates software bloat, the computational
+demands placed on the underlying hardware are significantly lower.
+
+Through close hardware/software co-design with the zedBSD system,
+this Sukuna-RISC and [Amaterrace GPU](https://github.com/awemorris/amaterrace-gpu)
+was conceived to deliver a first-class computing experience with
+low power consumption, a tiny silicon die area, and low
+manufacturing cost. Rather than relying on brute-force power or
+chasing extreme clock frequencies, it embodies a minimal, elegant
+architecture, operating comfortably within conservative,
+nergy-efficient voltage and clock envelopes while being tailored
+specifically to fulfill the zedBSD user experience.
+
 ---
 
-## 1. Architectural Overview
+## 1. Project Background & Design Philosophy
 
-Sukuna-RISC is an in-order, 3-SMT (Simultaneous Multi-Threading),
-asymmetric dual-issue processor implementing the 64-bit RISC-V RV64G
-instruction set.
+### The zedBSD Ecosystem: End-to-End Vertical Co-Design
+
+Modern generic processors have become monstrously bloated. In order to
+brute-force through unoptimized, layered software stacks (excessive
+abstraction layers, bloated runtimes, inefficient IPC, and
+uncoordinated scheduling), conventional CPUs dedicate huge amounts of
+silicon to aggressive out-of-order execution windows, multi-level
+speculative branches, register renaming tables, deep reorder buffers,
+and massive caches. This brute-force approach demands exorbitant die
+area, drives up silicon cost, and burns excessive power.
+
+**Sukuna-RISC rejects this brute-force paradigm.**
+
+This project is conceived and built as an indispensable part of
+**zedBSD**. zedBSD is an end-to-end, vertically integrated operating
+system and desktop environment optimized seamlessly from the ground
+up:
+
+- **Micro-optimized Unix Kernel**: Deterministic scheduler, zero-copy IPC, and lean kernel primitives.
+- **Direct GPU & DRM Drivers**: Low-overhead display rendering without bloated userspace abstraction layers.
+- **Lightweight System Services**: Clean, non-blocking asynchronous system services.
+- **Native Wayland Compositor & GUI Framework**: Ultra-responsive graphical interface with zero redundant buffer copies.
+
+Because the entire zedBSD software stack is vertically optimized from bottom to top, the computational demands imposed on the underlying hardware are drastically reduced. Software bloat is eliminated before it ever reaches the silicon.
 
 ```
-       +--------------------------------------------------------------------------+
-       |                           Sukuna-RISC Core                               |
-       |                                                                          |
-       |  +--------------------+  +--------------------+  +--------------------+  |
-       |  |       Hart 0       |  |      Hart 1        |  |       Hart 2       |  |
-       |  |  7-Stage Pipeline  |  |  7-Stage Pipeline  |  |  7-Stage Pipeline  |  |
-       |  +---------+----------+  +---------+----------+  +------+-------------+  |
-       |            |                       |                    |                |
-       |            +-----------------------+--------------------+                |
-       |                                    |                                     |
-       |            +-----------------------v--------------------+                |
-       |            |    Shared Execution Units (FMA / CFP / V)  |                |
-       |            +--------------------------------------------+                |
-       |                                                                          |
-       |  +--------------------+  +--------------------+  +--------------------+  |
-       |  | L1I Cache 16KB x 3 |  | L1D Cache 16KB x 3 |  |     L2 TLB / PTW   |  |
-       |  +---------+----------+  +---------+----------+  +------+-------------+  |
-       |            +-----------------------+--------------------+                |
-       |                                    v                                     |
-       |            +--------------------------------------------+                |
-       |            |         Shared 256KB L2 Cache (8-Way)      |                |
-       |            +-----------------------+--------------------+                |
-       +------------------------------------|-------------------------------------+
-                                            v
-                               AXI4 64/128-bit System Bus
+       +-------------------------------------------------------------+
+       |               zedBSD Native Applications & GUI              |
+       +-------------------------------------------------------------+
+       |           Lightweight Services & Wayland Compositor         |
+       +-------------------------------------------------------------+
+       |        Optimized zedBSD Kernel & Hardware Direct Drivers    |
+       +-------------------------------------------------------------+
+                                      |
+                     Hardware/Software Co-Design Boundary
+                                      |
+       +-------------------------------------------------------------+
+       |        Sukuna-RISC: Minimalist, Co-Designed 3-SMT Core      |
+       |  Hart 0: Kernel/Drivers | Hart 1: Foreground | Hart 2: Bkg  |
+       |  In-order 7-stage, Fixed-lane dual-issue, Zero-MUX datapath |
+       +-------------------------------------------------------------+
 ```
 
-### Key Parameters & Specifications
+### First-Class Computing with Minimal Silicon & Low Power
 
-- **ISA**: RISC-V RV64G (`RV64IMAFD` + `Zicsr` + `Zifencei`), pure 32-bit fixed-length instructions (no RVC).
-- **Harts (Hardware Threads)**: 3-way SMT (1 Core / 3 Threads):
-  - **Hart 0 (T1: Kernel)**: OS kernel execution, driver management, and platform external interrupt handling.
-  - **Hart 1 (T2: Foreground)**: High-priority interactive application main thread.
-  - **Hart 2 (T3: Background)**: Background services, batch workers, and auxiliary threads.
-- **Pipeline Depth**: 7-stage in-order pipeline per thread:
-  `IF1 -> IF2 -> ID1 -> ID2 -> ID3 -> EX -> WB`
-- **Issue Mechanism**: Fixed-lane asymmetric dual-issue with execution unit enable steering:
-  - **Lane 0 (Older)**: Carries the older instruction in program order (`inst0`).
-  - **Lane 1 (Younger)**: Carries the younger instruction in program order (`inst1`).
-  - **EX Enable Steering**: Execution units (INT-EU, MA-EU) accept inputs from both lanes without datapath swap multiplexers.
-  - **Dual-Issue Pairs**: `INT + MA` or `MA + INT` (when no RAW/WAW hazard exists and MA-EU is not stalled).
-- **Cache Hierarchy**:
-  - Parameterized N-way set-associative (2 <= N <= 32).
-  - **L1 Instruction Cache (L1I)**: 48 KB total (16 KB dedicated per thread, default 4-way set-associative).
-  - **L1 Data Cache (L1D)**: 48 KB total (16 KB dedicated per thread, default 4-way set-associative, byte-write strobe enabled).
-  - **Shared L2 Cache**: 256 KB unified (shared across all threads, default 8-way set-associative).
-  - **Physical Address Width (`PADDR_WIDTH`)**: Configurable 32-bit to 40-bit. Dynamic tag width calculation (`TAG_WIDTH = PADDR_WIDTH - INDEX_BITS - 6`).
-  - **Word-Aligned Interconnect**: Dropping lower 2 bits (`[PADDR_WIDTH-1:2]`) across internal bus and memory interfaces.
-- **Memory Management Unit (MMU)**:
-  - **L1-ITLB**: 8 entries dedicated per thread, 1-cycle latency.
-  - **L1-DTLB**: 8 entries dedicated per thread, 1-cycle latency.
-  - **Shared L2-TLB**: 256 entries unified.
-  - **Hardware Page Table Walker (PTW)**: Sv39 hardware page table walker.
-- **Target Performance & Operating Frequencies**:
-  - **5nm ASIC**: 1.5 GHz - 1.7 GHz (Tclk = 667 ps).
-  - **AMD/Xilinx Kintex-7 FPGA (-2)**: > 200 MHz sustained (204.12 MHz achieved on KC705).
-  - **Resource Footprint (KC705)**: 105.9k LUTs, 47.8k FFs, 4 BRAM tiles, 48 DSP slices (core level).
+Rather than purchasing an oversized, expensive off-the-shelf CPU that spends most of its energy fighting software inefficiencies, **we designed the CPU itself in tandem with zedBSD**.
+
+By co-designing the hardware and software:
+1. **Low Power Consumption & Modest Operating Voltage**: By keeping logic gates to only 2–3 levels per stage and using an in-order pipeline, the core operates at comfortable, power-efficient supply voltages with negligible dynamic switching energy.
+2. **Minimal Silicon Die Area & Low Cost**: The core achieves its throughput with approximately 30k–100k LUTs on FPGA (a tiny fraction of a square millimeter in standard CMOS ASIC), drastically cutting silicon manufacturing costs.
+3. **Hardware-Guaranteed Responsiveness**: SMT hardware threads are directly mapped to operating system roles, eliminating context-switch jitter and scheduling overhead for interactive desktop tasks.
 
 ---
 
-## 2. Architectural Decision: Eliminating RVC
+## 2. Hardware/Software Co-Designed Threading Strategy
 
-Instruction compression (RVC: 16-bit compressed instructions) is inherently a trade-off technique designed to maximize instruction cache hit rates in environments where memory hierarchy bandwidth is severely constrained.
+Sukuna-RISC implements 1 Core / 3 Hardware Threads (3-way SMT) customized specifically for zedBSD's execution architecture:
 
-In a high-frequency processor with well-provisioned L1/L2 caches and wide interconnect bandwidth, adopting RVC introduces disproportionate hardware penalties:
+```
+[ Hart 0 (Kernel) ]     --> Dedicated to Kernel, Drivers, Display Compositor & IRQs
+                            (Zero scheduling jitter, instant interrupt handling)
 
-1. **Variable-Length Boundary Detection**: Dynamically identifying variable 16-bit vs. 32-bit instruction boundaries at arbitrary 2-byte granularities creates deep logic chains.
-2. **Cross-Boundary Instruction Reassembly**: Multi-entry fetch buffers are required to reconstruct instructions that straddle 64-bit cache line boundaries.
-3. **Dynamic Shifting & Speculative Decompression for Dual-Issue**: The starting byte position of the second instruction dynamically depends on the length of the first instruction, requiring parallel speculative decompression trees (C2 vs. C4 candidates) and wide multiplexing trees.
-4. **Misaligned Instruction Exceptions**: Complex handling for non-4-byte-aligned branch targets and trap vectors.
+[ Hart 1 (Foreground) ] --> Dedicated to Active Foreground GUI Application
+                            (Zero preemption by background tasks, silky-smooth UI)
 
-These factors concentrate logic complexity and wiring congestion directly into the instruction fetch (IF) stages, becoming the primary bottleneck that degrades maximum operating frequency (Fmax).
+[ Hart 2 (Background) ] --> Dedicated to Background Daemons, Indexers & Batch Workers
+                            (Isolated workload, cannot degrade UI or kernel latency)
+```
 
-By decisively committing to **RV64G (pure 32-bit fixed-length instructions) and eliminating RVC**:
-
-- The fetch-to-decode structure is streamlined to zero-overhead logic.
-- All instruction addresses and PC increments are strictly 4-byte (or 8-byte) aligned.
-- Dual-issue slot extraction becomes trivial, fixed-wire slicing (`[31:0]` for Slot 0, `[63:32]` for Slot 1).
-- All RVC decompressors, rotational shifters, and multi-cycle fetch alignment queues are eradicated, unlocking high operating frequency.
+- **Hart 0 (T1: Kernel & System)**: Handles OS kernel syscalls, hardware device drivers, Wayland/DRM display compositor events, and platform external interrupts. Because the OS kernel has its own dedicated hardware thread, external device events and display synchronization are handled immediately without disturbing user applications.
+- **Hart 1 (T2: Foreground Interactive Task)**: Dedicated exclusively to the primary interactive thread of the foreground application. The user-facing app never suffers frame drops or stutter caused by background services or kernel preemption.
+- **Hart 2 (T3: Background Services)**: Handles background system daemons, periodic worker threads, compiler jobs, and non-interactive tasks. Even under heavy background workload, the interactive experience on Hart 1 remains instantaneous.
 
 ---
 
-## 3. Thread Pipeline & Microarchitecture
+## 3. Minimalist Microarchitecture: Area & Power Optimization
 
-To achieve 1.5 GHz on 5nm ASIC and > 200 MHz on 28nm FPGA, each hardware thread executes through a dedicated 7-stage in-order pipeline:
+Every microarchitectural decision in Sukuna-RISC is guided by **minimizing area and switching energy while guaranteeing responsive single-cycle throughput**.
+
+### 3.1 Eliminating RVC: Area & Power Savings Over Variable Decompression
+
+While the RISC-V Compressed extension (RVC, 16-bit instructions) improves memory density on memory-starved microcontrollers, it imposes severe silicon area and power penalties on a high-throughput core:
+
+1. **Elimination of Speculative Decompression Trees**: Supporting dual-issue with variable-length instructions requires parallel speculative decompression trees (C2 vs. C4 candidates) and dynamic crossbar multiplexers. Eliminating RVC cuts thousands of gates from the front-end.
+2. **Elimination of Cross-Boundary Reassembly Buffers**: Fixed 32-bit instructions never straddle 64-bit cache line boundaries at arbitrary 2-byte offsets. Multi-entry reassembly staging buffers are completely eradicated.
+3. **Direct Fixed-Wire Slicing**: Fetching a 64-bit word from the L1I cache yields two instructions by trivial, zero-cost wire slicing: `inst0 = rdata[31:0]` and `inst1 = rdata[63:32]`.
+4. **Energy Reduction**: Eliminating variable length instruction shifts removes wide multiplexing nets that switch on every single cycle, significantly lowering front-end dynamic power dissipation.
+
+### 3.2 Zero-MUX Addressing & Write-Enable (WEN) Freeze
+
+Multiplexers on 32-bit and 64-bit datapaths consume significant dynamic power, increase wire routing congestion, and demand larger silicon area. Sukuna-RISC uses **Write-Enable (WEN) gating and direct bit-slicing** to replace multiplexer arrays:
+
+- **Zero-MUX Register File Addressing (ID1)**:
+  In RISC-V, register specifiers are located at fixed bit positions across all instruction formats:
+  `rs1 = inst[19:15]`, `rs2 = inst[24:20]`.
+  Instead of waiting for instruction decoding and routing addresses through multiplexers, instruction bit slices are wired directly to the register file RAM read ports.
+- **Non-Shifting Issue with WEN Freeze**:
+  When an instruction pair `[AAA, BBB]` is fetched and `AAA` issues alone while `BBB` must be held (due to hazard or single-issue constraint):
+  - Conventional cores shift `BBB` from Slot 1 into Slot 0 through a wide cross-lane multiplexer on the next cycle.
+  - Sukuna-RISC simply deasserts `wen_slot1 = 0` (clock-gating the flip-flop), leaving `BBB` stationary in Slot 1.
+  - On the next cycle, the next instruction `CCC` is fetched directly into Slot 0 (`wen_slot0 = 1`).
+  - The pair `[CCC, BBB]` is processed with zero datapath shifting multiplexers, drastically reducing silicon footprint and switching power.
+- **FMA Dual-Slot Occupancy (Zero Extra Register Ports)**:
+  Fused Multiply-Add (`FMA`: `rs1 * rs2 +/- rs3`) requires 3 source operands. Standard designs add a costly third read port (3R1W) to the floating-point register file (FPR), bloating RAM cell area by 40%–50%.
+  Sukuna-RISC instead issues FMA across both slots (`FMA / NOP`):
+  - Slot 0 reads `rs1` and `rs2`.
+  - Slot 1 register port and bypass wiring are co-opted to read and transport `rs3`.
+  - The FPR remains a compact 2-read-port macro with zero area overhead.
+
+### 3.3 Conservative Voltage, High Timing Margin (ASIC & FPGA)
+
+Sukuna-RISC bounds combinational logic to **2 to 3 gate levels per stage**.
+Importantly, this low logic depth is **not intended to chase extreme, hot gigahertz clock rates**. Rather, it provides immense timing margin that enables:
+- **Low-Voltage Operation (Under-Volting)**: The processor easily meets its operating targets at lower, energy-efficient supply voltages (Vdd), achieving exponential dynamic power savings (power proportional to V^2).
+- **FPGA Synthesis without Routing Congestion**: On low-cost 28nm FPGA devices (e.g. Kintex-7 / Artix-7), the design easily closes timing at > 200 MHz without requiring aggressive floorplanning, high tool effort, or hot running silicon.
+- **Deterministic 1-Cycle Latencies**: Simple, balanced stages prevent unexpected multi-cycle stalls, ensuring predictable, smooth desktop interactivity.
+
+---
+
+## 4. Key Specifications
+
+| Parameter | Specification | Microarchitectural Detail |
+| :--- | :--- | :--- |
+| **Target OS** | **zedBSD** | End-to-end vertically co-designed hardware/software stack |
+| **Architecture** | RISC-V RV64G | `RV64IMAFD` + `Zicsr` + `Zifencei`, pure 32-bit fixed-length |
+| **Hardware Threads** | 3-way SMT (1 Core / 3 Harts) | Hart 0: Kernel/Drivers/Display, Hart 1: Foreground UI, Hart 2: Background |
+| **Pipeline** | 7-stage In-Order | `IF1 -> IF2 -> ID1 -> ID2 -> ID3 -> EX -> WB` |
+| **Issue Logic** | Asymmetric Dual-Issue | Fixed-lane (`Lane 0: Older`, `Lane 1: Younger`) with EX enable steering |
+| **Co-Issue Pairs** | `INT + MA` / `MA + INT` | Supported when no RAW/WAW hazard and MA is not stalled |
+| **L1 Instruction Cache** | 48 KB total (16 KB / thread) | Dedicated per thread, 4-way set-associative, word-addressed |
+| **L1 Data Cache** | 48 KB total (16 KB / thread) | Dedicated per thread, 4-way set-associative, byte-write strobe enabled |
+| **Shared L2 Cache** | 256 KB unified | Shared across 3 Harts, 8-way set-associative, write-back |
+| **MMU** | Sv39 Virtual Memory | L1-ITLB (8 ent/thread), L1-DTLB (8 ent/thread), Shared L2-TLB (256 ent), Shared PTW |
+| **Interconnect** | Word-Addressed AXI4 | `[PADDR_WIDTH-1:2]` word addressing, 64/128-bit system bus interface |
+| **Privilege Modes** | M-Mode, S-Mode, U-Mode | Full RISC-V Privileged Spec v1.12 compliance |
+| **FPGA Footprint** | ~105.9k LUTs, 47.8k FFs | Measured on Kintex-7 KC705 with full SoC, 3-SMT, caches, MMU & FP |
+| **FPGA Clock** | **> 200 MHz** sustained | 204.12 MHz achieved with positive timing slack |
+| **ASIC Potential** | 1.5 GHz - 1.7 GHz @ 5nm | 2–3 gate levels per stage; ideal for low-voltage, sub-watt operation |
+
+---
+
+## 5. Thread Pipeline & Microarchitecture
 
 ```
 +-----+     +-----+     +-----+     +-----+     +-----+     +----+     +----+
@@ -115,69 +182,60 @@ To achieve 1.5 GHz on 5nm ASIC and > 200 MHz on 28nm FPGA, each hardware thread 
                      EX Stall Backpressure
 ```
 
-### 3.1 Fixed-Lane Architecture & EX Enable Steering
+### 5.1 Fixed-Lane Architecture & EX Enable Steering
 
-#### Total Elimination of Datapath Multiplexers
-Conventional dual-issue designs assign dedicated functions to slots (e.g., Slot 0 = INT, Slot 1 = MA). When an `[MA, INT]` pair is fetched, hundreds of datapath wires (operands, immediates, register specifiers) must be swapped through wide multiplexers, degrading critical path timing.
+Conventional dual-issue designs assign dedicated functions to execution slots (e.g., Slot 0 = INT, Slot 1 = MA). When an `[MA, INT]` pair arrives, hundreds of datapath signals must be physically swapped through large multiplexers.
 
-Sukuna-RISC preserves physical instruction order straight through the pipeline:
+Sukuna-RISC preserves natural physical instruction order through dedicated lanes:
 - **Lane 0 (Older)**: Carries the older instruction (`inst0`) in program order through to Writeback.
 - **Lane 1 (Younger)**: Carries the younger instruction (`inst1`) in program order through to Writeback.
 - **EX Enable Steering**:
-  - **INT-EU**: Accepts operand busses from both Lane 0 and Lane 1. Activated by `int_en_l0` or `int_en_l1`.
-  - **MA-EU**: Accepts operand busses from both Lane 0 and Lane 1. Activated by `ma_en_l0` or `ma_en_l1`.
-  - When issuing `[INT, MA]`: `int_en_l0 = 1`, `ma_en_l1 = 1`.
-  - When issuing `[MA, INT]`: `ma_en_l0 = 1`, `int_en_l1 = 1`.
+  - **INT-EU**: Accepts operand busses from both Lane 0 and Lane 1. Driven by `int_en_l0` or `int_en_l1`.
+  - **MA-EU**: Accepts operand busses from both Lane 0 and Lane 1. Driven by `ma_en_l0` or `ma_en_l1`.
+  - Issuing `[INT, MA]`: `int_en_l0 = 1`, `ma_en_l1 = 1`.
+  - Issuing `[MA, INT]`: `ma_en_l0 = 1`, `int_en_l1 = 1`.
 
 #### Natural Precise Exception Guarantee
 Because Lane 0 is strictly older and Lane 1 is strictly younger:
-- If the leading Lane 0 instruction triggers an exception (e.g., page fault on load/store), Lane 1 commit is squashed by trivial gating:
+- If Lane 0 (e.g., MA load/store) triggers an exception (such as a page fault), Lane 1 commit is squashed by trivial gating:
   `if (lane0_exception) commit_lane1 = 0;`
-- No complex reorder buffers, speculative rename tables, or swap-tracking tags are required.
+- No speculative rename tables, history buffers, or reorder buffers are needed.
 
 ---
 
-### 3.2 Pipeline Stage Responsibilities
+### 5.2 Pipeline Stage Responsibilities
 
 #### ① IF1 (Instruction Fetch 1)
-- **PC Generation**: Selects the next fetch PC among branch prediction targets, trap/exception vectors, or sequential increment (+4 / +8).
-- **L1-ITLB & Cache Request**: Initiates 1-cycle L1-ITLB virtual-to-physical address translation and drives L1I cache tag and data arrays.
+- **PC Generation**: Selects next PC from branch target, trap vector, or sequential increment (+4 / +8).
+- **L1-ITLB & Cache Request**: 1-cycle L1-ITLB virtual-to-physical translation and initiates L1I cache array read.
 
 #### ② IF2 (Instruction Fetch 2)
-- **Instruction Queue & Skid Buffer**: Receives raw 64-bit data from the L1I cache array into a low-latency instruction buffer.
-- **Fixed Slicing**: Instantly slices the 64-bit word into `inst0 = rdata[31:0]` and `inst1 = rdata[63:32]`.
+- **Instruction Queue & Buffer**: Latches raw 64-bit data from the L1I cache into a shallow instruction buffer.
+- **Fixed Slicing**: Slices the word into `inst0 = rdata[31:0]` and `inst1 = rdata[63:32]`.
 
-#### ③ ID1 (Instruction Decode 1) — Zero-MUX Register File Addressing
-- **Fixed-Field Unconditional Register Fetch**:
-  - In RISC-V, source register indices occupy fixed bit positions across all instruction formats:
-    `rs1 = inst[19:15]`, `rs2 = inst[24:20]`
-  - Instead of waiting for instruction decode, instruction bits are wired directly to the register file read address ports:
-    - Port A / Port B: Lane 0 (`inst0[19:15]`, `inst0[24:20]`)
-    - Port C / Port D: Lane 1 (`inst1[19:15]`, `inst1[24:20]`)
-  - Eliminates address multiplexers, minimizing RAM setup time to the physical limit.
-- **Basic Decode**: Identifies opcode classes (INT, MA, FP, SIMD, SYSTEM) and generates 64-bit immediates.
+#### ③ ID1 (Instruction Decode 1) — Zero-MUX Register Fetch
+- **Fixed-Field Unconditional Register Fetch**: Instruction bits directly drive register file read addresses (`inst[19:15]`, `inst[24:20]`).
+- **Basic Decode**: Identifies opcode classes (INT, MA, FP, SIMD, SYSTEM) and expands 64-bit immediates.
 
 #### ④ ID2 (Instruction Decode 2) — Parallel Hazard Check & Issue Steering
-- **Register Array Access**: Register file data is read out from flip-flop RAM (`sk_ram_ff`).
-- **Concurrent Hazard & Issue Logic**: In parallel with RAM read-out, 5-bit comparators evaluate RAW and WAW dependencies between `inst0` and `inst1`:
-  - `inst0 = INT, inst1 = MA`: Checked for RAW (`inst1.rs != inst0.rd`).
-  - `inst0 = MA, inst1 = INT`: Checked for RAW (`inst1.rs != inst0.rd`) and WAW (`inst1.rd != inst0.rd`).
+- **Register Array Read**: Register file data is read out from flip-flop RAM (`sk_ram_ff`).
+- **Concurrent Hazard Logic**: In parallel with RAM read-out, 5-bit comparators check RAW and WAW dependencies between `inst0` and `inst1`.
 - **Suppression of MEM -> INT Dual-Issue**:
-  - MA instructions require 3 cycles (ADDR -> MA1 -> MA2).
-  - If a subsequent INT depends on the load result, co-issuing them would require selectively stalling only the INT-EU inside EX while routing a dedicated bypass from L1D output to ALU input.
-  - To prevent routing congestion and timing failure at 1.5 GHz, **co-issue is strictly prohibited when younger INT depends on older MEM**. The INT instruction is held in ID2 with a half-width bubble injected on Lane 1, issuing normally on the subsequent cycle.
+  - MA memory access requires 3 cycles (ADDR -> MA1 -> MA2).
+  - Co-issuing a dependent INT would require stalling only the INT-EU inside EX while routing a dedicated bypass from L1D output to ALU input.
+  - To prevent routing congestion and timing pressure, **co-issue is prohibited when younger INT depends on older MEM**. The INT instruction is held in ID2 with a half-width bubble injected on Lane 1, issuing cleanly on the next cycle.
 
 #### ⑤ ID3 (Instruction Decode 3) — Bypass Resolution & EX Direct Delivery
 - **Forwarding Integration**: Injects latest bypass values from EX and WB stages.
-- **Direct Arithmetic Routing**: Directs resolved operands straight to the execution unit inputs without intervening pre-ALU multiplexers.
+- **Direct Arithmetic Routing**: Directs resolved operands straight to execution unit inputs without pre-ALU multiplexers.
 
 #### ⑥ EX (Execution Stage)
-- **INT-EU**: Single-cycle integer ALU (add, sub, logical, shifts, comparisons).
+- **INT-EU**: Single-cycle integer ALU (arithmetic, logical, shifts, comparisons).
 - **MA-EU**: Dedicated 3-stage memory pipeline:
   - **ADDR (Cycle 1)**: Computes 64-bit effective address (`base + offset`).
   - **MA1 (Cycle 2)**: Translates virtual address via L1-DTLB and issues request to L1D cache.
   - **MA2 (Cycle 3)**: Latches synchronous read response from L1D data RAM.
-  - **Direct WB Connection**: L1D output routes directly to WB, where byte alignment and sign-extension occur without consuming additional EX execution cycles.
+  - **Direct WB Connection**: L1D output routes directly to WB, where byte alignment and sign-extension occur without consuming additional EX cycles.
 - **Shared Execution Units**: High-throughput execution for floating-point and vector math.
 
 #### ⑦ WB (Writeback / Commit)
@@ -186,80 +244,12 @@ Because Lane 0 is strictly older and Lane 1 is strictly younger:
 
 ---
 
-### 3.3 Zero-MUX Even-Aligned Fetch & Non-Shifting Issue
+## 6. Pipeline Hazard, Stall & Bubble Classification
 
-At 1.5 GHz (Tclk = 667 ps), a single 2:1 multiplexer on a 32-bit bus incurs 30 to 50 ps of delay (5% to 8% of the clock cycle). Sukuna-RISC eliminates all datapath multiplexers in the front-end using **Write-Enable (WEN) freeze control**:
+Pipeline flow is governed by 6 formal stall/bubble patterns to maintain exact architectural state without complex control logic:
 
-```
-[ Cycle 1: Instruction AAA issues single; BBB held ]
-  L1I Cache  ──(Even 8B Read: No Alignment MUX)──> [ AAA, BBB ]
-  ID1 Stage  : Slot 0 = AAA (Issue), Slot 1 = BBB (NOP Issue & Reg Frozen)
-  * wen_slot1 = 0 holds BBB in Slot 1 without shifting to Slot 0!
-
-[ Cycle 2: Next Even 8B [CCC, DDD] fetched and received with direct wiring ]
-  L1I Cache  ──(Next Even 8B Read)───────────────> [ CCC, DDD ]
-  ID1 Stage  : Slot 0 = CCC (New capture: wen0=1), Slot 1 = BBB (Held: wen1=0)
-  * Direct physical slot feed creates pair [CCC / BBB] without cross-wiring MUX!
-```
-
-#### Non-Shifting Issue & WEN Freeze
-When `AAA` issues alone and `BBB` cannot co-issue:
-- **Cycle 1**: `AAA` issues through Slot 0. Slot 1 emits a NOP bubble. `BBB` is held directly in Slot 1 by deasserting clock-enable (`wen_slot1 = 0`).
-- **Cycle 2**: Next 8-byte word `[CCC, DDD]` is fetched. `CCC` enters Slot 0 (`wen_slot0 = 1`), while `BBB` remains stationary in Slot 1.
-- The pair `[CCC, BBB]` is formed at ID1 **without passing through any cross-lane multiplexer**.
-
-#### Age Detection & Inverted Issue (`slot1_is_older`)
-When instructions are placed with younger `CCC` in Slot 0 and older `BBB` in Slot 1:
-- `slot1_is_older` is asserted.
-- Hazard detection reverses check direction: verifies if Slot 0 (`CCC`) reads Slot 1 (`BBB`) destination.
-- If independent, they co-issue in parallel without physical swapping. If dependent, IF1/IF2 stalls 1 cycle while `BBB` issues first.
-
-#### FMA Dual-Slot Occupancy
-Fused Multiply-Add (`FMA`: `rs1 * rs2 +/- rs3`) requires three source operands. Rather than adding an expensive 3rd read port (3R1W) to the Floating-Point Register file (FPR), an FMA instruction **occupies both Slot 0 and Slot 1 simultaneously**:
-
-```
-Slot 0 (Lane 0): FMA Opcode ──> Reads rs1_0, rs2_0 (Supplies rs1, rs2)
-Slot 1 (Lane 1): (Co-opted)  ──> Reads rs1_1       (Supplies rs3!)
-* Lane 1 datapath and bypass wiring directly transport rs3 to the FMA unit!
-```
-
-- **FMA always issues as `FMA / NOP`**:
-  - `INT / FMA`: Cannot co-issue (Slot 1 cannot fetch 3 operands); INT issues, FMA is held.
-  - `FMA / xxx`: FMA captures Slot 1 register ports; `xxx` is automatically forced into a bubble.
-- **Benefits**: Zero extra read ports on FPR (maintains standard 2R2W replication), zero additional 64-bit operand busses, and minimal control logic.
-
----
-
-### 3.4 ASIC 1.5 GHz Timing Budget & Logic Distribution
-
-To ensure timing closure at 1.5 GHz (Tclk = 667 ps), combinational logic depth between pipeline registers is capped at **2 to 3 complex gate levels** (6 to 8 inverter/NAND delays equivalent):
-
-| Component | Budget Allocation | Description |
-| :--- | :---: | :--- |
-| **Clock & Flop Overhead** | ~200 ps | `Tcq + Tsetup + Clock Skew/Jitter + OCV Margin` |
-| **Wire & Interconnect Margin** | ~200 ps | Global macro routing and intra-cell RC parasitic delay |
-| **Net Combinational Budget** | ~250 ps | Usable logic delay (2 to 3 gate levels per stage) |
-
-#### ID1 / ID2 / ID3 Stage Balancing
-| Stage | Key Operations | Gate Levels | Design Optimization |
-| :--- | :--- | :---: | :--- |
-| **ID1** | Fixed-bit RegFile address drive, basic decode, immediate generation | 1–2 | Direct wire slicing to RAM `raddr` without decode delay (Zero-MUX). |
-| **ID2** | 5-bit equality comparators for RAW/WAW, dual-issue check, EU enable drive | 2–3 | Hazard checks run completely in parallel with RegFile RAM array access. |
-| **ID3** | 5-bit bypass comparators, 3:1 operand forwarding multiplexers | 2 | Forwarding resolves immediately prior to EX stage, feeding directly into ALUs. |
-| **EX** | Dedicated arithmetic execution | Pipelined | Direct arrival into arithmetic arrays without front-end input multiplexers. |
-
-#### Word-Addressed Busses & Byte-Write Strobes
-- **Lower 2-Bit Truncation (`[PADDR_WIDTH-1:2]`)**: Because instruction and data accesses are naturally aligned to word boundaries, intra-core address busses (IF1, IF2, ITLB, DTLB, L1I, L1D, L2, BIU) truncate `addr[1:0]`, saving wiring congestion and reducing interconnect capacitance.
-- **Dedicated Byte Strobes (`byte_en[7:0]`)**: AGU generates byte enables directly from access size and low-order address bits, driving BRAM `wstrb[7:0]` inputs without complex aligner multiplexers on the write datapath.
-
----
-
-## 4. Pipeline Hazard, Stall & Bubble Classification
-
-To maintain precise architectural state without performance penalties, pipeline flow is controlled via 6 formal stall/bubble patterns:
-
-- **Stall (Freeze / Hold)**: Pipeline register clock enables are disabled (`clk_en = 0`). Current stage state and program counter are preserved.
-- **Bubble (Invalidate)**: An invalid marker (`valid = 0` / NOP) is injected into downstream registers, advancing the pipeline cleanly.
+- **Stall (Freeze / Hold)**: Pipeline register clock enables are disabled (`clk_en = 0`). Current stage state and PC are preserved.
+- **Bubble (Invalidate)**: An invalid marker (`valid = 0` / NOP) is injected downstream, advancing the pipeline cleanly.
 
 ```
                                 [ Stall & Bubble Classifications ]
@@ -271,47 +261,14 @@ EX Memory Stall     Load-Use Hazard         Half-Width Bubble       [MA, INT] Sk
 (L1D Miss / Bus)    (1-Cycle Bubble)        (Lane 1 NOP)            Commit Wait Bubble  Branch Flush
 ```
 
-### Pattern 1: Memory Stall at EX Stage (MA-EU L1D Cache Miss / Bus Wait)
-- **Trigger**: MA-EU encounters an L1D cache miss, L2 refill wait, or TLB miss.
-- **Action**: MA-EU asserts `ex_stall`.
-  - **Upstream Freeze**: Holds all upstream stages (`ID3, ID2, ID1, IF2, IF1`) in the current thread.
-  - **Downstream Drain**: WB completes previously retired instructions, then freezes.
-  - Other SMT threads continue execution uninterrupted.
+- **Pattern 1: Memory Stall at EX (L1D Cache Miss / Bus Wait)**: MA-EU asserts `ex_stall`, freezing upstream stages (`ID3, ID2, ID1, IF2, IF1`) in the current thread while WB drains completed instructions.
+- **Pattern 2: Load-Use Data Hazard (1-Cycle Bubble Insertion)**: When an instruction directly depends on a preceding load, `ID1` and `IF` stall for 1 cycle while a single bubble (`valid = 0`) is injected into `ID2/ID3 -> EX`.
+- **Pattern 3: Incompatible Pair or Intra-Pair RAW/WAW Hazard (Half-Width Bubble)**: Incompatible pairs (`INT + INT`, `MA + MA`) or dependent pairs issue `inst0` alone on Lane 0, injecting a bubble on Lane 1. PC advances by +4.
+- **Pattern 4: `[MA, INT]` Commit Skew Wait (Precise Exception Guarantee)**: When issuing independent `[MA, INT]`, Lane 1 (INT, 1 cycle) holds its result for 1 cycle until Lane 0 (MA, 2 cycles) confirms no memory exception.
+- **Pattern 5: Shared Execution Unit Busy Stall**: Stalls `ID1/ID2/ID3` when a shared FP/SIMD unit is occupied by another Hart or executing multi-cycle operations (`FDIV`, `FSQRT`).
+- **Pattern 6: Branch Misprediction or Trap Pipeline Flush**: Flushes all speculative stages (`IF1` through `EX`) with `valid = 0` and redirects fetch to corrected target or trap vector (`mtvec` / `stvec`).
 
-### Pattern 2: Load-Use Data Hazard (1-Cycle Bubble Insertion)
-- **Trigger**: An instruction immediately following a load references the loaded destination register `rd`.
-- **Action**: Because MA requires 2 cycles (ADDR -> MA/L1D read) before data can be forwarded:
-  - `ID1` and `IF` stages are stalled for 1 cycle.
-  - A **1-cycle bubble (`valid = 0`)** is injected into `ID2/ID3` -> `EX`.
-
-### Pattern 3: Incompatible Pair or Intra-Pair RAW/WAW Hazard (Half-Width Bubble)
-- **Trigger**: Non-dual-issuable pairs (`INT + INT`, `MA + MA`), intra-pair RAW/WAW hazards, or younger INT depending on older MEM.
-- **Action**:
-  - `inst0` issues alone on **Lane 0**.
-  - **Lane 1 receives a bubble (`valid = 0`)**.
-  - Fetch PC increments by +4, and `inst1` carries over to become `inst0` on the next cycle.
-
-### Pattern 4: `[MA, INT]` Commit Skew Wait (Precise Exception Guarantee)
-- **Trigger**: Independent `[MA, INT]` dual-issue pair (Lane 0 = MA [2 cycles], Lane 1 = INT [1 cycle]).
-- **Action**:
-  - While INT completes in 1 cycle, MA memory exceptions (e.g., page fault) are not known until cycle 2.
-  - Lane 1 holds its completed result, **delaying WB commit by 1 cycle** until Lane 0 confirms no exception.
-  - If Lane 0 faults, Lane 1 is squashed without altering architectural state.
-
-### Pattern 5: Shared Execution Unit Busy Stall
-- **Trigger**: Contention for shared FP/SIMD units or long-latency multi-cycle operations (e.g., `FDIV`, `FSQRT`).
-- **Action**: The shared arbiter asserts thread-specific busy backpressure, stalling `ID1/ID2/ID3` until the execution unit becomes available.
-
-### Pattern 6: Branch Misprediction or Trap Pipeline Flush
-- **Trigger**: Branch mispredict detected in EX, or an exception/trap event occurs.
-- **Action**:
-  - Speculative in-flight instructions are purged.
-  - **Synchronous flush (`valid = 0`)** clears `IF1, IF2, ID1, ID2, ID3, EX`.
-  - Fetch resumes from the corrected branch target or trap vector (`mtvec` / `stvec`).
-
----
-
-### 4.1 Asymmetric Dual-Issue & Lane Control Matrix
+### Dual-Issue & Lane Control Matrix
 
 | Older Inst (`inst0`) | Younger Inst (`inst1`) | Condition for Dual-Issue | Lane 0 | Lane 1 | INT-EU Driver | MA-EU Driver | Instructions Retired |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
@@ -324,7 +281,7 @@ EX Memory Stall     Load-Use Hazard         Half-Width Bubble       [MA, INT] Sk
 
 ---
 
-## 5. Comprehensive System Architecture & Block Diagram
+## 7. System Architecture & Block Diagram
 
 ```mermaid
 flowchart TB
@@ -424,32 +381,9 @@ flowchart TB
 
 ---
 
-### 5.1 Key Interconnects & Control Signal Specifications
+## 8. Privileged Architecture & CSR Specification
 
-| Source Unit | Destination Unit | Signals / Busses | Type | Description |
-| :--- | :--- | :--- | :---: | :--- |
-| **PLIC / CLINT** | **CSR Unit (Hart 0..2)** | `irq_m_ext`, `irq_s_ext`, `irq_timer`, `irq_sw` | Control | Asynchronous interrupt request lines to each Hart |
-| **CSR Unit** | **PC Gen / Hazard** | `trap_valid`, `trap_target_pc`, `mret_sret_pc` | Control | Trap handling / return PC redirect and pipeline flush |
-| **MA Stage (EX)** | **Hazard Unit** | `ex_stall` (L1D miss, bus wait) | Control | Stalls upstream stages (`ID3, ID2, ID1, IF2, IF1`) |
-| **Hazard Unit** | **IF / ID1 / ID2 / ID3** | `stall_fetch`, `stall_id1`, `stall_id2`, `stall_id3` | Control | Clock enable deassertion (pipeline register freeze) |
-| **Hazard Unit** | **ID3 / EX** | `bubble_lane1`, `insert_load_use_bubble` | Control | Injects bubble (`valid = 0`) on single-issue or load-use hazard |
-| **ID2 Stage** | **EX Stage (INT/MA)** | `int_en_l0/l1`, `ma_en_l0/l1` | Control | Steers lane inputs to execution units without datapath MUXes |
-| **ID1 Stage** | **RegFile** | `raddr_inst0_rs1/rs2`, `raddr_inst1_rs1/rs2` | Address | Instruction bit-slice read addresses directly to RAM |
-| **ID1 Stage** | **Shared Arbiter** | `req_valid`, `hart_id[1:0]`, `op_type`, `operands` | Data/Ctrl | Requests allocation of shared FP/SIMD execution units |
-| **Shared Arbiter** | **Hazard Unit** | `unit_busy`, `stall_thread[2:0]` | Control | Stalls issue of requesting thread when shared unit is busy |
-| **Shared Units** | **WB Stage** | `resp_valid`, `hart_id[1:0]`, `dest_reg`, `res_data` | Data/Ctrl | Returns multi-cycle execution results to thread writeback |
-| **MA Stage (AGU)** | **L1-DTLB / L1D** | `req_valid`, `vaddr[63:0]`, `wdata[63:0]`, `byte_en`| Data/Ctrl | Memory load and store requests |
-| **L1D Cache** | **Coherence Unit** | `snoop_req`, `snoop_resp`, `invalidate_line` | Control | Inter-thread cache coherence maintenance |
-| **TLB / PTW** | **L2 Cache Arbiter** | `ptw_req_addr`, `ptw_data_resp` | Data/Ctrl | Page Table Entry (PTE) refill transactions |
-| **L1I / L1D** | **L2 Cache Arbiter** | `l2_req_valid`, `l2_req_type`, `line_addr`, `wline` | Data/Ctrl | 64-byte cache line refill and dirty eviction transactions |
-
----
-
-## 6. Privileged Architecture & CSR Specification
-
-Sukuna-RISC complies with the RISC-V Privileged Architecture Specification (v1.12), implementing Machine (M), Supervisor (S), and User (U) privilege modes to support full UNIX-like operating systems (Linux, FreeBSD) and real-time kernels.
-
-### 6.1 Privilege Modes & State Transitions
+Sukuna-RISC fully implements the RISC-V Privileged Architecture (v1.12), providing Machine (M), Supervisor (S), and User (U) privilege modes to run full zedBSD multi-user unix kernels:
 
 ```
        +---------------------------------------------+
@@ -459,24 +393,18 @@ Sukuna-RISC complies with the RISC-V Privileged Architecture Specification (v1.1
              | MRET                  ^ Traps / ECALL
              v (Restore MPP/MPIE)    | (M-delegated = 0)
        +---------------------------------------------+
-       |                  S-Mode                     |
+       |                  S-Mode (zedBSD Kernel)     |
        |  (stvec, sepc, scause, stval, sstatus, satp)|
        +---------------------------------------------+
              | SRET                  ^ Traps / ECALL
              v (Restore SPP/SPIE)    | (M-delegated = 1)
        +---------------------------------------------+
-       |                  U-Mode                     |
-       |             (User Programs)                 |
+       |                  U-Mode (User Apps)         |
+       |             (Wayland, GUI, Shell)           |
        +---------------------------------------------+
 ```
 
-- **Machine Mode (`priv_mode = 2'b11`)**: Highest privilege level. Reset entry point. Full access to physical memory and hardware configuration CSRs.
-- **Supervisor Mode (`priv_mode = 2'b01`)**: OS kernel execution mode. Supports Sv39 virtual memory address translation and S-mode interrupt/exception handling.
-- **User Mode (`priv_mode = 2'b00`)**: Unprivileged user application mode. Traps to S-mode or M-mode upon attempting privileged instructions.
-
----
-
-### 6.2 CSR Register Map
+### 8.1 CSR Register Map
 
 Each hardware thread implements an independent `sukuna_csr_unit`:
 
@@ -504,40 +432,17 @@ Each hardware thread implements an independent `sukuna_csr_unit`:
 | `0x144` | `sip` | S (RW) | Supervisor interrupt pending register |
 | `0x180` | `satp` | S (RW) | Supervisor address translation and protection (`MODE[63:60], ASID[59:44], PPN[43:0]`) |
 
----
+### 8.2 System Instruction Invariants & State Protection
 
-### 6.3 Privileged & CSR Single-Issue Invariant
-
-To guarantee architectural consistency, system instructions obey strict issue invariants:
-
-1. **Strict Lane 0 Single-Issue**:
-   - When `opcode == 7'b1110011` (`SYSTEM`: `CSRRx`, `ECALL`, `EBREAK`, `MRET`, `SRET`, `SFENCE.VMA`), `ID1` forces single-issue.
-   - `ID2` suppresses `can_dual`, injecting a half-width bubble (`valid = 0`) into Lane 1.
-   - Fetch consumes exactly 1 instruction (`consume_step = 1`), preserving the trailing instruction for next-cycle fetch into Lane 0.
-2. **Commit-Stage Write Separation (Zero Speculative State Corruption)**:
-   - **EX Stage**: Combinational read of CSR registers (`csr_raddr` -> `csr_rdata`) and privilege verification (`csr_illegal`).
-   - **WB Stage**: Modifications to CSR state (`csr_commit_wen`) occur strictly upon commit when no preceding exception exists.
+- **Strict Lane 0 Single-Issue**: System instructions (`SYSTEM`: `CSRRx`, `ECALL`, `EBREAK`, `MRET`, `SRET`, `SFENCE.VMA`) always force single-issue on Lane 0, injecting a bubble on Lane 1.
+- **Commit-Stage Write Separation**: CSR register modifications occur strictly at the WB stage when preceding instructions have committed without exception, eliminating speculative state pollution.
+- **Synchronous Traps & TLB Flushes**: Updating `satp` or issuing `SFENCE.VMA` automatically purges in-flight pipeline stages and flushes L1/L2 TLBs, ensuring immediate address translation consistency for zedBSD virtual memory management.
 
 ---
 
-### 6.4 Traps, Returns & Virtual Memory Transitions
+## 9. Implementation & Timing Benchmark Results
 
-- **Trap Handling (`ECALL`, `EBREAK`, `PAGE_FAULT`, `ILLEGAL_INST`)**:
-  - The WB stage asserts `trap_valid_o`, suppressing architectural register updates.
-  - `u_csr` traps to M-mode or S-mode depending on `medeleg`/`mideleg`, saving `mepc`/`sepc` and `mcause`/`scause`.
-  - Asserts `trap_flush_o`, flushing all in-flight pipeline stages (`IF1` to `EX`).
-  - Fetches the next instruction directly from `mtvec` or `stvec`.
-- **Privilege Return (`MRET`, `SRET`)**:
-  - Emitted at WB stage, restoring privilege levels (`MPP`/`SPP`) and interrupt enables (`MPIE`/`SPIE`).
-  - Purges pipeline and redirects PC to `mepc` or `sepc`.
-- **Address Translation Switch (`satp` Update & `SFENCE.VMA`)**:
-  - Updating `satp` or issuing `SFENCE.VMA` triggers a synchronous pipeline flush and flushes L1/L2 TLBs, ensuring subsequent fetches immediately utilize updated address mappings.
-
----
-
-## 7. Synthesis & Timing Benchmark Results
-
-The design has been verified and benchmarked under Out-Of-Context (OOC) logic synthesis using **AMD/Xilinx Vivado 2026.1** targeting the **Kintex-7 KC705** (`xc7k325tffg900-2`) evaluation board at a reference clock of **200.00 MHz (Tclk = 5.000 ns)**:
+The design has been verified and benchmarked under Out-Of-Context (OOC) logic synthesis using **AMD/Xilinx Vivado 2026.1** targeting the **Kintex-7 KC705** (`xc7k325tffg900-2`) FPGA board at a reference clock of **200.00 MHz (Tclk = 5.000 ns)**:
 
 - **Top-Level SoC (`sukuna_top`)**: **204.12 MHz** (Slack: **+0.101 ns**, 195.6k LUTs, 65.0k FFs, 4 BRAMs, 48 DSPs) — **PASSED**
 - **CPU Core (`sukuna_core`)**: **203.87 MHz** (Slack: **+0.095 ns**, 105.9k LUTs, 47.8k FFs, 4 BRAMs, 48 DSPs) — **PASSED**
@@ -561,7 +466,7 @@ The design has been verified and benchmarked under Out-Of-Context (OOC) logic sy
 
 ---
 
-## 8. Directory Structure
+## 10. Directory Structure
 
 ```
 .
@@ -579,16 +484,16 @@ The design has been verified and benchmarked under Out-Of-Context (OOC) logic sy
 │   ├── isa/                    # RISC-V architectural compliance assembly tests
 │   └── sukuna_tb.v             # Comprehensive verification testbench
 ├── scripts/                    # Synthesis, linting, and benchmark automation scripts
-│   ├── asic-lint.py            # ASIC 1.5 GHz structural and timing rule checker
+│   ├── asic-lint.py            # ASIC structural and timing rule checker
 │   ├── run_isa_tests.py        # Automated ISA regression test runner
 │   └── run_ooc_benchmark.py    # Out-Of-Context Vivado timing benchmark runner
-├── style.md                    # Coding standard and ASIC 1.5 GHz design guidelines
+├── style.md                    # Coding standard and design guidelines
 └── README.md                   # Architecture specification (this document)
 ```
 
 ---
 
-## 9. Verification & Build
+## 11. Verification & Build
 
 Sukuna-RISC includes a self-checking testbench and runs automated RISC-V architectural compliance tests.
 
@@ -602,15 +507,15 @@ make sim-run
 python3 scripts/run_isa_tests.py
 ```
 
-### Static Linting & ASIC Rules Checking
+### Static Linting
 
 ```bash
-# Run RTL pre-checks and ASIC 1.5 GHz compliance linter
+# Run RTL pre-checks and structural compliance linter
 python3 scripts/asic-lint.py --all
 ```
 
 ---
 
-## 10. License
+## 12. License
 
 Sukuna-RISC is released under the **Apache License 2.0**. See `LICENSE` for details.
