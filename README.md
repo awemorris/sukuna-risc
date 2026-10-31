@@ -4,6 +4,9 @@ Sukuna-RISC
 `Sukuna-RISC` is a zlib-licensed RTL for a high-frequency 64-bit
 RISC-V processor core implemented in Verilog 2025.
 
+This project is a part of [zedBSD](https://github.com/awemorris/zedBSD)
+and the CPU is intended for use with zedBSD.
+
 The name Sukuna comes from Sukunahikona, literally meaning "Small
 Genius," with a double meaning of "reduced" of RISC.
 
@@ -94,7 +97,7 @@ By decisively committing to **RV64G (pure 32-bit fixed-length instructions) and 
 - The fetch-to-decode structure is streamlined to zero-overhead logic.
 - All instruction addresses and PC increments are strictly 4-byte (or 8-byte) aligned.
 - Dual-issue slot extraction becomes trivial, fixed-wire slicing (`[31:0]` for Slot 0, `[63:32]` for Slot 1).
-- All RVC decompressors, rotational shifters, and multi-cycle fetch alignment queues are eradicated, unlocking ultra-high operating frequency.
+- All RVC decompressors, rotational shifters, and multi-cycle fetch alignment queues are eradicated, unlocking high operating frequency.
 
 ---
 
