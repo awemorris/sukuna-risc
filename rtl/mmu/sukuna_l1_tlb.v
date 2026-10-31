@@ -163,10 +163,9 @@ module sukuna_l1_tlb #(
   // Hit: in Bare mode, always hit; in Sv39 mode, CAM hit or immediate canonical fault
   assign hit_o = is_bare ? lookup_valid_i : (lookup_valid_i && (tlb_hit || canonical_fault));
 
-  // PADDR: Bare mode passes through VADDR directly; Sv39 translates
-  assign paddr_w_o = is_bare ? vaddr_w_i[PADDR_WIDTH-1:2] :
-                     canonical_fault ? {(PADDR_WIDTH-2){1'b0}} :
-                     translated_paddr_w;
+  // PADDR: Bare mode passes through VADDR directly; Sv39 translates unconditionally
+  // (Validity and canonical faults are carried by the 1-bit hit_o / page_fault_o strobes)
+  assign paddr_w_o = is_bare ? vaddr_w_i[PADDR_WIDTH-1:2] : translated_paddr_w;
 
   // Page Fault: canonical address error or entry marked as fault
   assign page_fault_o = lookup_valid_i && !is_bare && (canonical_fault || (tlb_hit && hit_entry_fault));

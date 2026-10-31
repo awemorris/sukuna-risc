@@ -14,12 +14,16 @@ L2_WAYS        ?= 8
 L1I_SIZE_BYTES ?= 16384
 L1D_SIZE_BYTES ?= 16384
 L2_SIZE_BYTES  ?= 262144
+MUL_LAT        ?= 3
+FP_MUL_LAT     ?= 3
 
 CONFIG_DEFINES := -DPADDR_WIDTH=$(PADDR_WIDTH) -DL1I_WAYS=$(L1I_WAYS) \
                   -DL1D_WAYS=$(L1D_WAYS) -DL2_WAYS=$(L2_WAYS) \
                   -DL1I_SIZE_BYTES=$(L1I_SIZE_BYTES) \
                   -DL1D_SIZE_BYTES=$(L1D_SIZE_BYTES) \
-                  -DL2_SIZE_BYTES=$(L2_SIZE_BYTES)
+                  -DL2_SIZE_BYTES=$(L2_SIZE_BYTES) \
+                  -DMUL_LAT=$(MUL_LAT) \
+                  -DFP_MUL_LAT=$(FP_MUL_LAT)
 
 # Project & Board Parameters
 TOP_MODULE     ?= sukuna_top

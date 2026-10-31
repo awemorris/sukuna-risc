@@ -56,27 +56,40 @@ module sukuna_hazard_unit (
   wire upstream_freeze = ex_stall_i || shared_eu_stall_i;
 
   // L1I is decoupled via IF2 fetch queue; only halt on WFI in thread pipe
-  // upstream_freeze is decoupled from IF1 via IF2 skid buffer (Rule 5)
+  // upstream_freeze and ID1 slot-1 hold are decoupled from IF1 via IF2 skid buffer (Rule 5)
   assign stall_l1i_o = 1'b0;
-  assign stall_if1_o = l1i_miss_i || if2_stall_req_i || id1_hold_slot1_i;
+  assign stall_if1_o = l1i_miss_i || if2_stall_req_i;
   assign stall_if2_o = upstream_freeze;
   assign stall_id1_o = upstream_freeze;
   assign stall_id2_o = upstream_freeze;
   assign stall_id3_o = upstream_freeze;
   assign stall_ex_o  = upstream_freeze;
 
-  // Flush logic
+  // Flush logic:
+  // Register global_flush into flush_pipe_q to break the EX branch comparator -> IF1/IF2/ID1/ID2
+  // combinational fanout path. On Cycle N, only ID3->EX (flush_id3_o) and EX->WB (flush_ex_o)
+  // are squashed immediately; upstream stages (IF1..ID2) advance one step on Cycle N and are
+  // cleanly squashed on Cycle N+1 by the registered flush_pipe_q (synchronized with redirect_valid_q).
   wire global_flush = branch_mispredict_i || trap_flush_i;
+  reg  flush_pipe_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  assign flush_if1_o = global_flush;
-  assign flush_if2_o = global_flush;
-  assign flush_id1_o = global_flush;
-  assign flush_id2_o = global_flush;
-  assign flush_id3_o = global_flush;
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      flush_pipe_q <= 1'b0;
+    end else begin
+      flush_pipe_q <= global_flush;
+    end
+  end
+
+  assign flush_if1_o = flush_pipe_q;
+  assign flush_if2_o = flush_pipe_q;
+  assign flush_id1_o = flush_pipe_q;
+  assign flush_id2_o = flush_pipe_q;
+  assign flush_id3_o = global_flush || flush_pipe_q;
   assign flush_ex_o  = trap_flush_i;
 
   // Avoid unused input warnings
-  wire _unused_haz = &{1'b0, clk_i, rst_ni, ex_is_load_i, ex_load_rd_i,
+  wire _unused_haz = &{1'b0, id1_hold_slot1_i, ex_is_load_i, ex_load_rd_i,
                        id1_rs1_l0_i, id1_rs2_l0_i, id1_rs1_l1_i, id1_rs2_l1_i, 1'b0};
 
 endmodule

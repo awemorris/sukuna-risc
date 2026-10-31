@@ -144,6 +144,9 @@ module sukuna_int_eu #(
   reg             mul_busy_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg             mul_word_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg             mul_high_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg             div_busy_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  wire accept_new = valid_i && !mul_busy_q && !div_busy_q;
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -156,14 +159,14 @@ module sukuna_int_eu #(
       mul_pipe_vld_q <= {(MUL_LAT+1){1'b0}};
       mul_busy_q     <= 1'b0;
     end else if (!stall_i) begin
-      mul_pipe_vld_q <= {mul_pipe_vld_q[MUL_LAT-1:0], (valid_i && is_mul_any)};
-      if (valid_i && is_mul_any) begin
+      mul_pipe_vld_q <= {mul_pipe_vld_q[MUL_LAT-1:0], (accept_new && is_mul_any)};
+      if (!mul_busy_q) begin
         mul_word_q <= is_word_i;
         mul_high_q <= (alu_op_i == `ALU_MULH) || (alu_op_i == `ALU_MULHSU) || (alu_op_i == `ALU_MULHU);
-        if (MUL_LAT > 1) begin
-          mul_rd_q   <= rd_i;
-          mul_busy_q <= 1'b1;
-        end
+        mul_rd_q   <= rd_i;
+      end
+      if (accept_new && is_mul_any && (MUL_LAT > 1)) begin
+        mul_busy_q <= 1'b1;
       end else if (mul_pipe_vld_q[MUL_LAT-1]) begin
         mul_busy_q <= 1'b0;
       end
@@ -177,12 +180,11 @@ module sukuna_int_eu #(
   wire is_rem_op     = (alu_op_i == `ALU_REM)  || (alu_op_i == `ALU_REMU);
   wire is_div_op     = (alu_op_i == `ALU_DIV)  || (alu_op_i == `ALU_REM) ||
                        (alu_op_i == `ALU_DIVU) || (alu_op_i == `ALU_REMU);
-  wire div_start = valid_i && is_div_op && !div_busy_q;
+  wire div_start = accept_new && is_div_op && !stall_i;
   wire div_ready;
   wire div_done;
   wire [XLEN-1:0] div_quotient;
   wire [XLEN-1:0] div_remainder;
-  reg  div_busy_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg  div_is_rem_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg  div_word_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0] div_rd_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -217,11 +219,13 @@ module sukuna_int_eu #(
     end else if (flush_i) begin
       div_busy_q   <= 1'b0;
     end else begin
-      if (div_start) begin
-        div_busy_q   <= 1'b1;
+      if (!div_busy_q) begin
         div_is_rem_q <= is_rem_op;
         div_word_q   <= is_word_i;
         div_rd_q     <= rd_i;
+      end
+      if (div_start) begin
+        div_busy_q   <= 1'b1;
       end else if (div_done) begin
         div_busy_q   <= 1'b0;
       end
@@ -281,13 +285,15 @@ module sukuna_int_eu #(
         valid_o  <= 1'b1;
         rd_o     <= (MUL_LAT > 1) ? mul_rd_q : rd_i;
         result_o <= mul_final_res;
-      end else if (valid_i && !is_mul_any && !is_div_op) begin
+      end else if (accept_new && !is_mul_any && !is_div_op) begin
         valid_o  <= 1'b1;
         rd_o     <= rd_i;
         result_o <= final_alu_res;
-      end else if (!busy_o) begin
+      end else begin
         valid_o <= 1'b0;
       end
+    end else begin
+      valid_o <= 1'b0;
     end
   end
 

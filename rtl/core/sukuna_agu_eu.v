@@ -24,12 +24,20 @@ module sukuna_agu_eu #(
 
   // Dispatched from ID/RF (Slot 1 MA)
   input  wire                   req_valid_i,
+  input  wire [XLEN-1:0]        req_pc_i,
   input  wire [7:0]             req_op_i,
   input  wire [4:0]             req_rd_i,
   input  wire [XLEN-1:0]        req_base_i,
   input  wire [XLEN-1:0]        req_offset_i,
   input  wire [XLEN-1:0]        req_wdata_i,
   output wire                   busy_o,
+  output wire                   s1_valid_o,
+  output wire [4:0]             s1_rd_o,
+  output wire                   s1_is_fp_o,
+  output wire                   s2_valid_o,
+  output wire [4:0]             s2_rd_o,
+  output wire                   s2_is_fp_o,
+  output wire                   miss_or_amo_stall_o,
 
   // Snoop invalidation input (for multi-hart LR/SC reservation clearing)
   input  wire                   snoop_inv_valid_i,
@@ -67,8 +75,10 @@ module sukuna_agu_eu #(
 
   // Output to Writeback Stage
   output wire                   resp_valid_o,
+  output wire [XLEN-1:0]        resp_pc_o,
   output wire [4:0]             resp_rd_o,
-  output wire [XLEN-1:0]        resp_rdata_o
+  output wire [XLEN-1:0]        resp_rdata_o,
+  output wire                   resp_writes_fpr_o
 );
 
   // --------------------------------------------------------------------------
@@ -113,6 +123,7 @@ module sukuna_agu_eu #(
 
   // Stage 1 Registers (ADDR -> MA1)
   reg                     s1_valid_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]          s1_pc_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [7:0]               s1_op_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0]               s1_rd_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [VADDR_WIDTH-1:2]   s1_vaddr_w_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -120,6 +131,7 @@ module sukuna_agu_eu #(
   reg [7:0]               s1_byte_en_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]          s1_wdata_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]          s1_orig_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s1_wait_q;         /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // --------------------------------------------------------------------------
   // Stage 2: MA1 (DTLB Translation & L1D Request Setup)
@@ -164,64 +176,155 @@ module sukuna_agu_eu #(
   assign l1d_req_write_o     = (agu_state_q == S_AGU_STORE) ? 1'b1 :
                                (s1_is_alu_amo || s1_is_sc) ? 1'b0 : s1_op_q[3];
 
-  // Dedicated Uncached Request Driving
-  assign uncached_req_valid_o   = s1_valid_q && dtlb_hit_i && is_uncached;
-  assign uncached_req_write_o   = s1_op_q[3];
-  assign uncached_req_op_o      = s1_op_q[3:0];
-  assign uncached_req_byte_en_o = s1_byte_en_q;
-  assign uncached_req_paddr_w_o = dtlb_paddr_w_i;
-  assign uncached_req_wdata_o   = s1_wdata_q;
-
   // Stage 2 Registers (MA1 -> MA2)
-  reg                     s2_valid_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg                     s2_is_uncached_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [7:0]               s2_op_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [4:0]               s2_rd_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [2:0]               s2_addr_lsb_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [PADDR_WIDTH-1:2]   s2_paddr_w_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [XLEN-1:0]          s2_orig_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  wire [2:0] s1_sign_byte_idx = (s1_op_q[1:0] == 2'b00) ? s1_addr_lsb_q :
+                                (s1_op_q[1:0] == 2'b01) ? (s1_addr_lsb_q + 3'd1) :
+                                                          (s1_addr_lsb_q + 3'd3);
+
+  wire       s1_is_flw   = (s1_op_q[7:4] == `AMO_FP) && !s1_op_q[3] && (s1_op_q[2:0] == 3'b010);
+  wire       s1_l1d_fast = !is_uncached && !s1_is_alu_amo;
+  wire       s1_b0_keep  = s1_l1d_fast;
+  wire       s1_b1_keep  = s1_l1d_fast && (s1_op_q[1:0] != 2'b00);
+  wire       s1_b1_sign  = s1_l1d_fast && (s1_op_q[1:0] == 2'b00) && !s1_op_q[2];
+  wire       s1_h1_keep  = s1_l1d_fast && s1_op_q[1];
+  wire       s1_h1_sign  = s1_l1d_fast && !s1_op_q[1] && !s1_op_q[2];
+  wire       s1_w1_keep  = s1_l1d_fast && (s1_op_q[1:0] == 2'b11);
+  wire       s1_w1_sign  = s1_l1d_fast && (s1_op_q[1:0] != 2'b11) && !s1_op_q[2] && !s1_is_flw;
+  wire       s1_w1_one   = s1_is_flw;
+
+  reg                     s2_valid_q;             /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]          s2_pc_q;                /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_is_uncached_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_uncached_req_sent_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [7:0]               s2_op_q;                /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [7:0]               s2_byte_en_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [4:0]               s2_rd_q;                /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [2:0]               s2_addr_lsb_q;          /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [2:0]               s2_sign_byte_idx_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_b0_keep_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_b1_keep_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_b1_sign_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_h1_keep_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_h1_sign_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_w1_keep_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_w1_sign_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_w1_one_q;            /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [PADDR_WIDTH-1:2]   s2_paddr_w_q;           /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]          s2_wdata_q;             /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]          s2_orig_wdata_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg                     s2_wait_q;              /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  // Dedicated Uncached Request Driving (driven cleanly from MA2 registers)
+  assign uncached_req_valid_o   = s2_valid_q && s2_is_uncached_q && !s2_uncached_req_sent_q;
+  assign uncached_req_write_o   = s2_op_q[3];
+  assign uncached_req_op_o      = s2_op_q[3:0];
+  assign uncached_req_byte_en_o = s2_byte_en_q;
+  assign uncached_req_paddr_w_o = s2_paddr_w_q;
+  assign uncached_req_wdata_o   = s2_wdata_q;
 
   // --------------------------------------------------------------------------
-  // Stage 3: MA2 (L1D BRAM Read Latency & Output Holding Buffer)
+  // Stage 3: MA2 (L1D BRAM Read Latency, Parallel Byte Alignment & Sign Extension)
   // --------------------------------------------------------------------------
-  // Output holding buffer: Latches raw L1D output into a clean register
-  // before entering wide rotation and sign extension in the subsequent cycle
+  wire             resp_valid_in = s2_is_uncached_q ? uncached_resp_valid_i : l1d_resp_valid_i;
+  wire             s2_stays_busy = s2_valid_q && !resp_valid_in;
+
+  // Fast L1D path: extract sign bit and byte-align directly on l1d_rdata_i (8:1 MUXF7)
+  reg s2_l1d_raw_sign;
+  always @(*) begin
+    case (s2_sign_byte_idx_q)
+      3'd0: s2_l1d_raw_sign = l1d_rdata_i[7];
+      3'd1: s2_l1d_raw_sign = l1d_rdata_i[15];
+      3'd2: s2_l1d_raw_sign = l1d_rdata_i[23];
+      3'd3: s2_l1d_raw_sign = l1d_rdata_i[31];
+      3'd4: s2_l1d_raw_sign = l1d_rdata_i[39];
+      3'd5: s2_l1d_raw_sign = l1d_rdata_i[47];
+      3'd6: s2_l1d_raw_sign = l1d_rdata_i[55];
+      3'd7: s2_l1d_raw_sign = l1d_rdata_i[63];
+    endcase
+  end
+
+  reg [63:0] s2_l1d_aligned;
+  always @(*) begin
+    case (s2_addr_lsb_q)
+      3'd0: s2_l1d_aligned = l1d_rdata_i;
+      3'd1: s2_l1d_aligned = {8'd0,  l1d_rdata_i[63:8]};
+      3'd2: s2_l1d_aligned = {16'd0, l1d_rdata_i[63:16]};
+      3'd3: s2_l1d_aligned = {24'd0, l1d_rdata_i[63:24]};
+      3'd4: s2_l1d_aligned = {32'd0, l1d_rdata_i[63:32]};
+      3'd5: s2_l1d_aligned = {40'd0, l1d_rdata_i[63:40]};
+      3'd6: s2_l1d_aligned = {48'd0, l1d_rdata_i[63:48]};
+      3'd7: s2_l1d_aligned = {56'd0, l1d_rdata_i[63:56]};
+    endcase
+  end
+
+  // Non-critical Uncached / AMO / SC / constant-fill path (decoupled from l1d_rdata_i)
+  reg s2_unc_raw_sign;
+  always @(*) begin
+    case (s2_sign_byte_idx_q)
+      3'd0: s2_unc_raw_sign = uncached_resp_rdata_i[7];
+      3'd1: s2_unc_raw_sign = uncached_resp_rdata_i[15];
+      3'd2: s2_unc_raw_sign = uncached_resp_rdata_i[23];
+      3'd3: s2_unc_raw_sign = uncached_resp_rdata_i[31];
+      3'd4: s2_unc_raw_sign = uncached_resp_rdata_i[39];
+      3'd5: s2_unc_raw_sign = uncached_resp_rdata_i[47];
+      3'd6: s2_unc_raw_sign = uncached_resp_rdata_i[55];
+      3'd7: s2_unc_raw_sign = uncached_resp_rdata_i[63];
+    endcase
+  end
+
+  wire s2_unc_sign_ext = s2_unc_raw_sign && !s2_op_q[2];
+  wire s2_unc_fill_hi  = s2_w1_one_q ? 1'b1 : s2_unc_sign_ext;
+
+  reg [63:0] s2_unc_aligned;
+  always @(*) begin
+    case (s2_addr_lsb_q)
+      3'd0: s2_unc_aligned = uncached_resp_rdata_i;
+      3'd1: s2_unc_aligned = {8'd0,  uncached_resp_rdata_i[63:8]};
+      3'd2: s2_unc_aligned = {16'd0, uncached_resp_rdata_i[63:16]};
+      3'd3: s2_unc_aligned = {24'd0, uncached_resp_rdata_i[63:24]};
+      3'd4: s2_unc_aligned = {32'd0, uncached_resp_rdata_i[63:32]};
+      3'd5: s2_unc_aligned = {40'd0, uncached_resp_rdata_i[63:40]};
+      3'd6: s2_unc_aligned = {48'd0, uncached_resp_rdata_i[63:48]};
+      3'd7: s2_unc_aligned = {56'd0, uncached_resp_rdata_i[63:56]};
+    endcase
+  end
+
+  reg [XLEN-1:0] s2_unc_formatted;
+  always @(*) begin
+    case (s2_op_q[1:0])
+      2'b00:   s2_unc_formatted = {{56{s2_unc_sign_ext}}, s2_unc_aligned[7:0]};
+      2'b01:   s2_unc_formatted = {{48{s2_unc_sign_ext}}, s2_unc_aligned[15:0]};
+      2'b10:   s2_unc_formatted = {{32{s2_unc_fill_hi}},  s2_unc_aligned[31:0]};
+      default: s2_unc_formatted = s2_unc_aligned;
+    endcase
+  end
+
+  wire [63:0] s2_l1d_const_fill = {{32{s2_w1_one_q}}, 32'd0};
+  wire [63:0] s2_non_l1d_data   = (agu_state_q == S_AGU_SC)    ? 64'd1 :
+                                  (agu_state_q == S_AGU_STORE) ? amo_rdata_q :
+                                  s2_is_uncached_q             ? s2_unc_formatted :
+                                                                 s2_l1d_const_fill;
+
+  // Single-LUT5 final merge per bit into buf_raw_data_q
+  wire [63:0] s2_next_buf_data;
+  assign s2_next_buf_data[7:0]   = s2_b0_keep_q ? s2_l1d_aligned[7:0] :
+                                                  s2_non_l1d_data[7:0];
+  assign s2_next_buf_data[15:8]  = s2_b1_keep_q ? s2_l1d_aligned[15:8] :
+                                   s2_b1_sign_q ? {8{s2_l1d_raw_sign}} :
+                                                  s2_non_l1d_data[15:8];
+  assign s2_next_buf_data[31:16] = s2_h1_keep_q ? s2_l1d_aligned[31:16] :
+                                   s2_h1_sign_q ? {16{s2_l1d_raw_sign}} :
+                                                  s2_non_l1d_data[31:16];
+  assign s2_next_buf_data[63:32] = s2_w1_keep_q ? s2_l1d_aligned[63:32] :
+                                   s2_w1_sign_q ? {32{s2_l1d_raw_sign}} :
+                                                  s2_non_l1d_data[63:32];
+
+  // WB Output Holding Registers (Pure FF outputs to WB / EX forwarding)
   reg                     buf_valid_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [XLEN-1:0]          buf_pc_q;          /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [63:0]              buf_raw_data_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0]               buf_rd_q;          /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [7:0]               buf_op_q;          /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [2:0]               buf_addr_lsb_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-
-  // --------------------------------------------------------------------------
-  // WB Connection: Direct Alignment Rotator & Sign Extension
-  // --------------------------------------------------------------------------
-  reg [63:0] aligned_rdata;
-  always @(*) begin
-    case (buf_addr_lsb_q)
-      3'd0: aligned_rdata = buf_raw_data_q;
-      3'd1: aligned_rdata = {8'd0,  buf_raw_data_q[63:8]};
-      3'd2: aligned_rdata = {16'd0, buf_raw_data_q[63:16]};
-      3'd3: aligned_rdata = {24'd0, buf_raw_data_q[63:24]};
-      3'd4: aligned_rdata = {32'd0, buf_raw_data_q[63:32]};
-      3'd5: aligned_rdata = {40'd0, buf_raw_data_q[63:40]};
-      3'd6: aligned_rdata = {48'd0, buf_raw_data_q[63:48]};
-      3'd7: aligned_rdata = {56'd0, buf_raw_data_q[63:56]};
-    endcase
-  end
-
-  wire byte_sign = aligned_rdata[7]  & !buf_op_q[2];
-  wire half_sign = aligned_rdata[15] & !buf_op_q[2];
-  wire word_sign = aligned_rdata[31] & !buf_op_q[2];
-
-  reg [XLEN-1:0] formatted_rdata;
-  always @(*) begin
-    case (buf_op_q[1:0])
-      2'b00:   formatted_rdata = {{56{byte_sign}}, aligned_rdata[7:0]};
-      2'b01:   formatted_rdata = {{48{half_sign}}, aligned_rdata[15:0]};
-      2'b10:   formatted_rdata = {{32{word_sign}}, aligned_rdata[31:0]};
-      default: formatted_rdata = aligned_rdata;
-    endcase
-  end
+  reg                     buf_writes_fpr_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // AMO ALU Operations (operates on registered amo_rdata_q)
   wire is_word_amo   = (s2_op_q[1:0] == 2'b10);
@@ -264,31 +367,25 @@ module sukuna_agu_eu #(
 
   wire [XLEN-1:0] amo_wdata_aligned = is_word_amo ? {2{calc_amo_result[31:0]}} : calc_amo_result;
 
-  // Response Signals to WB
-  wire sc_fail_resp_valid = (agu_state_q == S_AGU_IDLE) && sc_failed_q;
-  reg  store_resp_valid_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  always @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      store_resp_valid_q <= 1'b0;
-    end else begin
-      store_resp_valid_q <= (agu_state_q == S_AGU_STORE) && l1d_resp_valid_i;
-    end
-  end
-
-  assign resp_valid_o = buf_valid_q || sc_fail_resp_valid || store_resp_valid_q;
-
-  assign resp_rd_o    = buf_valid_q         ? buf_rd_q :
-                        sc_fail_resp_valid  ? s1_rd_q  : s2_rd_q;
-  assign resp_rdata_o = buf_valid_q         ? formatted_rdata :
-                        sc_fail_resp_valid  ? 64'd1 :
-                        sc_success_q        ? 64'd0 : amo_rdata_q;
+  // Response Signals to WB (0 logic levels: direct flip-flop outputs)
+  assign resp_valid_o      = buf_valid_q;
+  assign resp_writes_fpr_o = buf_writes_fpr_q;
+  assign resp_pc_o         = buf_pc_q;
+  assign resp_rd_o         = buf_rd_q;
+  assign resp_rdata_o      = buf_raw_data_q;
 
   // Unit Busy Signal: High while any stage holds valid operations or waiting for cache/amo
   // Driven strictly by registered state flags to prevent combinational feedthrough
-  assign busy_o = s1_valid_q || s2_valid_q || (agu_state_q != S_AGU_IDLE) || sc_failed_q;
-
-  wire             resp_valid_in = s2_is_uncached_q ? uncached_resp_valid_i : l1d_resp_valid_i;
-  wire [XLEN-1:0]  resp_data_in  = s2_is_uncached_q ? uncached_resp_rdata_i : l1d_rdata_i;
+  assign busy_o              = s1_valid_q || s2_valid_q || (agu_state_q != S_AGU_IDLE) || sc_failed_q;
+  assign s1_valid_o          = s1_valid_q;
+  assign s1_rd_o             = s1_rd_q;
+  assign s1_is_fp_o          = (s1_op_q[7:4] == `AMO_FP);
+  assign s2_valid_o          = s2_valid_q;
+  assign s2_rd_o             = s2_rd_q;
+  assign s2_is_fp_o          = (s2_op_q[7:4] == `AMO_FP);
+  assign miss_or_amo_stall_o = s1_wait_q || s2_wait_q || (agu_state_q != S_AGU_IDLE) || sc_failed_q ||
+                               (s1_valid_q && (s1_op_q[7:4] == `AMO_FP) && !s1_op_q[3]) ||
+                               (s2_valid_q && (s2_op_q[7:4] == `AMO_FP) && !s2_op_q[3]);
 
   // --------------------------------------------------------------------------
   // Sequential Pipeline State Update
@@ -296,6 +393,7 @@ module sukuna_agu_eu #(
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       s1_valid_q       <= 1'b0;
+      s1_pc_q          <= {XLEN{1'b0}};
       s1_op_q          <= 8'd0;
       s1_byte_en_q     <= 8'd0;
       s1_rd_q          <= 5'd0;
@@ -303,20 +401,35 @@ module sukuna_agu_eu #(
       s1_addr_lsb_q    <= 3'd0;
       s1_wdata_q       <= {XLEN{1'b0}};
       s1_orig_wdata_q  <= {XLEN{1'b0}};
+      s1_wait_q        <= 1'b0;
 
-      s2_valid_q       <= 1'b0;
-      s2_is_uncached_q <= 1'b0;
-      s2_op_q          <= 8'd0;
-      s2_rd_q          <= 5'd0;
-      s2_addr_lsb_q    <= 3'd0;
-      s2_paddr_w_q     <= {(PADDR_WIDTH-2){1'b0}};
-      s2_orig_wdata_q  <= {XLEN{1'b0}};
+      s2_valid_q             <= 1'b0;
+      s2_pc_q                <= {XLEN{1'b0}};
+      s2_is_uncached_q       <= 1'b0;
+      s2_uncached_req_sent_q <= 1'b0;
+      s2_op_q                <= 8'd0;
+      s2_byte_en_q           <= 8'd0;
+      s2_rd_q                <= 5'd0;
+      s2_addr_lsb_q          <= 3'd0;
+      s2_sign_byte_idx_q     <= 3'd0;
+      s2_b0_keep_q           <= 1'b0;
+      s2_b1_keep_q           <= 1'b0;
+      s2_b1_sign_q           <= 1'b0;
+      s2_h1_keep_q           <= 1'b0;
+      s2_h1_sign_q           <= 1'b0;
+      s2_w1_keep_q           <= 1'b0;
+      s2_w1_sign_q           <= 1'b0;
+      s2_w1_one_q            <= 1'b0;
+      s2_paddr_w_q           <= {(PADDR_WIDTH-2){1'b0}};
+      s2_wdata_q             <= {XLEN{1'b0}};
+      s2_orig_wdata_q        <= {XLEN{1'b0}};
+      s2_wait_q              <= 1'b0;
 
       buf_valid_q      <= 1'b0;
+      buf_pc_q         <= {XLEN{1'b0}};
       buf_raw_data_q   <= 64'd0;
       buf_rd_q         <= 5'd0;
-      buf_op_q         <= 8'd0;
-      buf_addr_lsb_q   <= 3'd0;
+      buf_writes_fpr_q <= 1'b0;
 
       agu_state_q      <= S_AGU_IDLE;
       res_valid_q      <= 1'b0;
@@ -333,7 +446,8 @@ module sukuna_agu_eu #(
       end
 
       // WB buffered valid pulse auto-clearing
-      buf_valid_q <= 1'b0;
+      buf_valid_q      <= 1'b0;
+      buf_writes_fpr_q <= 1'b0;
 
       case (agu_state_q)
         S_AGU_IDLE: begin
@@ -341,34 +455,52 @@ module sukuna_agu_eu #(
             sc_failed_q <= 1'b0;
           end
 
-          // MA2 Stage: Capture L1D or Uncached response into holding buffer
-          if (s2_valid_q && resp_valid_in) begin
-            s2_valid_q <= 1'b0;
-            if (s2_op_q[7:4] == `AMO_LR) begin
-              // LR sets reservation
-              res_valid_q    <= 1'b1;
-              res_paddr_w_q  <= s2_paddr_w_q;
-              buf_valid_q    <= 1'b1;
-              buf_raw_data_q <= resp_data_in;
-              buf_rd_q       <= s2_rd_q;
-              buf_op_q       <= s2_op_q;
-              buf_addr_lsb_q <= s2_addr_lsb_q;
-            end else if (s2_op_q[7:4] >= `AMO_SWAP && s2_op_q[7:4] <= `AMO_MAXU) begin
-              // AMO read completed: latch raw read data and transition to ALU calculation step
-              store_paddr_w_q <= s2_paddr_w_q;
-              amo_rdata_q     <= amo_latch_data;
-              agu_state_q     <= S_AGU_ALU;
-            end else begin
-              // Normal load or store completion
-              if (s2_op_q[3]) begin
-                res_valid_q  <= 1'b0; // Any store clears reservation
-              end
-              buf_valid_q    <= 1'b1;
-              buf_raw_data_q <= resp_data_in;
-              buf_rd_q       <= s2_rd_q;
-              buf_op_q       <= s2_op_q;
-              buf_addr_lsb_q <= s2_addr_lsb_q;
+          // MA2 Stage: Capture pre-aligned & sign-extended L1D or Uncached response into WB register
+          if (s2_valid_q) begin
+            if (s2_is_uncached_q && !s2_uncached_req_sent_q && uncached_req_ready_i) begin
+              s2_uncached_req_sent_q <= 1'b1;
             end
+            if (resp_valid_in) begin
+              s2_valid_q             <= 1'b0;
+              s2_uncached_req_sent_q <= 1'b0;
+              s2_wait_q              <= 1'b0;
+              s2_b0_keep_q           <= 1'b0;
+              s2_b1_keep_q           <= 1'b0;
+              s2_b1_sign_q           <= 1'b0;
+              s2_h1_keep_q           <= 1'b0;
+              s2_h1_sign_q           <= 1'b0;
+              s2_w1_keep_q           <= 1'b0;
+              s2_w1_sign_q           <= 1'b0;
+              if (s2_op_q[7:4] == `AMO_LR) begin
+                // LR sets reservation
+                res_valid_q      <= 1'b1;
+                res_paddr_w_q    <= s2_paddr_w_q;
+                buf_valid_q      <= 1'b1;
+                buf_pc_q         <= s2_pc_q;
+                buf_raw_data_q   <= s2_next_buf_data;
+                buf_rd_q         <= s2_rd_q;
+                buf_writes_fpr_q <= 1'b0;
+              end else if (s2_op_q[7:4] >= `AMO_SWAP && s2_op_q[7:4] <= `AMO_MAXU) begin
+                // AMO read completed: latch raw read data and transition to ALU calculation step
+                store_paddr_w_q <= s2_paddr_w_q;
+                amo_rdata_q     <= amo_latch_data;
+                agu_state_q     <= S_AGU_ALU;
+              end else begin
+                // Normal load or store completion
+                if (s2_op_q[3]) begin
+                  res_valid_q    <= 1'b0; // Any store clears reservation
+                end
+                buf_valid_q      <= 1'b1;
+                buf_pc_q         <= s2_pc_q;
+                buf_raw_data_q   <= s2_next_buf_data;
+                buf_rd_q         <= s2_rd_q;
+                buf_writes_fpr_q <= (s2_op_q[7:4] == `AMO_FP) && !s2_op_q[3];
+              end
+            end else begin
+              s2_wait_q <= 1'b1;
+            end
+          end else begin
+            s2_wait_q <= 1'b0;
           end
 
           // MA1 Stage: Dispatch to L1D and advance to MA2
@@ -378,22 +510,50 @@ module sukuna_agu_eu #(
               store_paddr_w_q <= dtlb_paddr_w_i;
               agu_state_q     <= S_AGU_SC;
               s1_valid_q      <= 1'b0;
-            end else if (dtlb_hit_i && !s2_valid_q && (!is_uncached || uncached_req_ready_i)) begin
+              s1_wait_q       <= 1'b0;
+              s2_b0_keep_q    <= 1'b0;
+              s2_b1_keep_q    <= 1'b0;
+              s2_b1_sign_q    <= 1'b0;
+              s2_h1_keep_q    <= 1'b0;
+              s2_h1_sign_q    <= 1'b0;
+              s2_w1_keep_q    <= 1'b0;
+              s2_w1_sign_q    <= 1'b0;
+            end else if (dtlb_hit_i && !s2_stays_busy) begin
               // Advance to MA2
-              s2_valid_q        <= 1'b1;
-              s2_is_uncached_q  <= is_uncached;
-              s2_op_q           <= s1_op_q;
-              s2_rd_q           <= s1_rd_q;
-              s2_addr_lsb_q     <= s1_addr_lsb_q;
-              s2_paddr_w_q      <= dtlb_paddr_w_i;
-              s2_orig_wdata_q   <= s1_orig_wdata_q;
-              s1_valid_q        <= 1'b0;
+              s2_valid_q             <= 1'b1;
+              s2_pc_q                <= s1_pc_q;
+              s2_is_uncached_q       <= is_uncached;
+              s2_uncached_req_sent_q <= 1'b0;
+              s2_op_q                <= s1_op_q;
+              s2_byte_en_q           <= s1_byte_en_q;
+              s2_rd_q                <= s1_rd_q;
+              s2_addr_lsb_q          <= s1_addr_lsb_q;
+              s2_sign_byte_idx_q     <= s1_sign_byte_idx;
+              s2_b0_keep_q           <= s1_b0_keep;
+              s2_b1_keep_q           <= s1_b1_keep;
+              s2_b1_sign_q           <= s1_b1_sign;
+              s2_h1_keep_q           <= s1_h1_keep;
+              s2_h1_sign_q           <= s1_h1_sign;
+              s2_w1_keep_q           <= s1_w1_keep;
+              s2_w1_sign_q           <= s1_w1_sign;
+              s2_w1_one_q            <= s1_w1_one;
+              s2_paddr_w_q           <= dtlb_paddr_w_i;
+              s2_wdata_q             <= s1_wdata_q;
+              s2_orig_wdata_q        <= s1_orig_wdata_q;
+              s2_wait_q              <= is_uncached || s1_is_alu_amo;
+              s1_valid_q             <= 1'b0;
+              s1_wait_q              <= 1'b0;
+            end else begin
+              s1_wait_q         <= 1'b1;
             end
+          end else begin
+            s1_wait_q <= 1'b0;
           end
 
           // ADDR Stage: Latch newly dispatched memory request
           if (req_valid_i && !s1_valid_q && !s2_valid_q && agu_state_q == S_AGU_IDLE && !sc_failed_q) begin
             s1_valid_q      <= 1'b1;
+            s1_pc_q         <= req_pc_i;
             s1_op_q         <= req_op_i;
             s1_byte_en_q    <= calc_byte_en;
             s1_rd_q         <= req_rd_i;
@@ -401,6 +561,7 @@ module sukuna_agu_eu #(
             s1_addr_lsb_q   <= calc_vaddr[2:0];
             s1_wdata_q      <= calc_aligned_wdata;
             s1_orig_wdata_q <= req_wdata_i;
+            s1_wait_q       <= (req_op_i[7:4] != `AMO_NONE && req_op_i[7:4] != `AMO_LR && req_op_i[7:4] != `AMO_FP);
           end
         end
 
@@ -408,12 +569,19 @@ module sukuna_agu_eu #(
           res_valid_q <= 1'b0; // SC always clears reservation
           if (sc_match) begin
             sc_success_q <= 1'b1;
+            amo_rdata_q  <= 64'd0;
             amo_wdata_q  <= s1_wdata_q;
             s2_rd_q      <= s1_rd_q;
+            s2_pc_q      <= s1_pc_q;
             agu_state_q  <= S_AGU_STORE;
           end else begin
-            sc_failed_q  <= 1'b1;
-            agu_state_q  <= S_AGU_IDLE;
+            sc_failed_q      <= 1'b1;
+            buf_valid_q      <= 1'b1;
+            buf_pc_q         <= s1_pc_q;
+            buf_rd_q         <= s1_rd_q;
+            buf_raw_data_q   <= s2_next_buf_data;
+            buf_writes_fpr_q <= 1'b0;
+            agu_state_q      <= S_AGU_IDLE;
           end
         end
 
@@ -425,10 +593,15 @@ module sukuna_agu_eu #(
 
         S_AGU_STORE: begin
           if (l1d_resp_valid_i) begin
-            // AMO / SC store completed
-            res_valid_q  <= 1'b0;
-            sc_success_q <= 1'b0;
-            agu_state_q  <= S_AGU_IDLE;
+            // AMO / SC store completed: latch response into WB output registers
+            res_valid_q      <= 1'b0;
+            sc_success_q     <= 1'b0;
+            buf_valid_q      <= 1'b1;
+            buf_pc_q         <= s2_pc_q;
+            buf_rd_q         <= s2_rd_q;
+            buf_raw_data_q   <= s2_next_buf_data;
+            buf_writes_fpr_q <= 1'b0;
+            agu_state_q      <= S_AGU_IDLE;
           end
         end
       endcase

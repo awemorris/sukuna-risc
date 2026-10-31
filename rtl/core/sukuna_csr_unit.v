@@ -227,10 +227,8 @@ module sukuna_csr_unit #(
   wire has_m_interrupt = m_int_enable && (|m_pending_masked);
   wire has_s_interrupt = s_int_enable && (|s_pending_masked);
 
-  assign interrupt_pending_o = (has_m_interrupt || has_s_interrupt) && !wfi_sleep_o;
-
-  // Interrupt priority encoder
-  assign interrupt_cause_o = has_m_interrupt ?
+  wire       interrupt_pending_d = (has_m_interrupt || has_s_interrupt) && !wfi_sleep_o;
+  wire [5:0] interrupt_cause_d   = has_m_interrupt ?
     (m_pending_masked[11] ? {1'b1, 5'd11} : // MEIP
      m_pending_masked[3]  ? {1'b1, 5'd3}  : // MSIP
      m_pending_masked[7]  ? {1'b1, 5'd7}  : // MTIP
@@ -239,6 +237,12 @@ module sukuna_csr_unit #(
      s_pending_masked[1]  ? {1'b1, 5'd1}  : // SSIP
      s_pending_masked[5]  ? {1'b1, 5'd5}  : // STIP
      {1'b1, 5'd0});
+
+  reg       interrupt_pending_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [5:0] interrupt_cause_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  assign interrupt_pending_o = interrupt_pending_q;
+  assign interrupt_cause_o   = interrupt_cause_q;
 
   // --------------------------------------------------------------------------
   // State Machine & Register Updates
@@ -263,10 +267,20 @@ module sukuna_csr_unit #(
       stval_q          <= {XLEN{1'b0}};
       satp_o           <= {XLEN{1'b0}};
 
-      ssip_q           <= 1'b0;
-      fcsr_q           <= 8'd0;
-      wfi_sleep_o      <= 1'b0;
+      ssip_q              <= 1'b0;
+      fcsr_q              <= 8'd0;
+      wfi_sleep_o         <= 1'b0;
+      interrupt_pending_q <= 1'b0;
+      interrupt_cause_q   <= 6'd0;
     end else begin
+      // Pipelined interrupt pending evaluation (cleared for 1 cycle on trap/ret/CSR write)
+      if (exception_valid_i || mret_valid_i || sret_valid_i || csr_commit_wen_i) begin
+        interrupt_pending_q <= 1'b0;
+      end else begin
+        interrupt_pending_q <= interrupt_pending_d;
+      end
+      interrupt_cause_q <= interrupt_cause_d;
+
       // WFI sleep management
       if (wfi_valid_i) begin
         wfi_sleep_o <= 1'b0; // RISC-V spec: WFI is a hint that can legally execute without hanging

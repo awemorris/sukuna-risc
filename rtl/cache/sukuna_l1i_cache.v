@@ -67,9 +67,7 @@ module sukuna_l1i_cache #(
   // Bits [5:2]: word offset within 64-byte line (4 bits -> 16 words of 32-bit)
   // Bits [5+INDEX_BITS : 6]: set index
   // Bits [PADDR_WIDTH-1 : 6+INDEX_BITS]: tag
-  wire [3:0]            req_word_offset = fetch_paddr_w_i[5:2];
   wire [INDEX_BITS-1:0] req_index       = fetch_paddr_w_i[5+INDEX_BITS:6];
-  wire [TAG_WIDTH-1:0]  req_tag         = fetch_paddr_w_i[PADDR_WIDTH-1:6+INDEX_BITS];
 
   // Pipeline registers for tag comparison stage
   reg                    req_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -114,7 +112,12 @@ module sukuna_l1i_cache #(
   reg                    pending_flush_req_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [PADDR_WIDTH-1:2]  pending_paddr_w_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  wire [INDEX_BITS-1:0]  look_index = (pending_flush_req_q && !miss_busy_q) ? pending_paddr_w_q[5+INDEX_BITS:6] : req_index;
+  wire                   use_pending     = pending_flush_req_q && !miss_busy_q && !flush_i;
+  wire [PADDR_WIDTH-1:2] lookup_paddr_w  = use_pending ? pending_paddr_w_q : fetch_paddr_w_i;
+  wire [3:0]             look_offset     = lookup_paddr_w[5:2];
+  wire [INDEX_BITS-1:0]  look_index      = lookup_paddr_w[5+INDEX_BITS:6];
+  wire [TAG_WIDTH-1:0]   look_tag        = lookup_paddr_w[PADDR_WIDTH-1:6+INDEX_BITS];
+
   wire [WAYS-1:0]        req_way_valid;
   for (gw = 0; gw < WAYS; gw = gw + 1) begin : gen_req_way_valid
     assign req_way_valid[gw] = fence_i_flush_i ? 1'b0 :
@@ -122,6 +125,10 @@ module sukuna_l1i_cache #(
                                                    way_valid_out[gw][look_index];
   end
   reg [WAYS-1:0]         pipe2_way_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+  // Pipeline advance enable: independent of fetch_paddr_w_i and fetch_req_valid_i
+  wire pipe_advance = flush_i ? !(miss_busy_q && !refill_resp_valid_i) :
+                                ((pending_flush_req_q && !miss_busy_q) || !fetch_miss_o);
 
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -132,41 +139,17 @@ module sukuna_l1i_cache #(
       req_tag_q         <= {TAG_WIDTH{1'b0}};
       req_paddr_w_q     <= {(PADDR_WIDTH-2){1'b0}};
     end else begin
-      if (flush_i) begin
-        if (miss_busy_q && (fetch_paddr_w_i[PADDR_WIDTH-1:6] == req_paddr_w_q[PADDR_WIDTH-1:6])) begin
-          // Same cache line in-flight refill: update word offset to redirect target
-          req_offset_q      <= req_word_offset;
-          req_paddr_w_q     <= fetch_paddr_w_i;
-          req_valid_q       <= 1'b1;
-          pipe2_way_valid_q <= req_way_valid;
-        end else if (miss_busy_q && !refill_resp_valid_i) begin
-          // Flush to different line while refilling: invalidate pipeline request
-          req_valid_q       <= 1'b0;
-          pipe2_way_valid_q <= {WAYS{1'b0}};
-        end else begin
-          // Not currently refilling: evaluate redirect target immediately
-          req_valid_q       <= 1'b1;
-          pipe2_way_valid_q <= req_way_valid;
-          req_offset_q      <= req_word_offset;
-          req_index_q       <= req_index;
-          req_tag_q         <= req_tag;
-          req_paddr_w_q     <= fetch_paddr_w_i;
-        end
-      end else if (pending_flush_req_q && !miss_busy_q) begin
-        // Servicing pending redirect request after previous refill completed
-        req_valid_q       <= 1'b1;
+      if (flush_i && miss_busy_q && !refill_resp_valid_i) begin
+        // Flush while refilling: clear 1-bit valid and service redirect after refill
+        req_valid_q       <= 1'b0;
+        pipe2_way_valid_q <= {WAYS{1'b0}};
+      end else if (pipe_advance) begin
+        req_valid_q       <= (flush_i || use_pending) ? 1'b1 : (fetch_req_valid_i && !stall_i);
         pipe2_way_valid_q <= req_way_valid;
-        req_offset_q      <= pending_paddr_w_q[5:2];
-        req_index_q       <= pending_paddr_w_q[5+INDEX_BITS:6];
-        req_tag_q         <= pending_paddr_w_q[PADDR_WIDTH-1:6+INDEX_BITS];
-        req_paddr_w_q     <= pending_paddr_w_q;
-      end else if (!fetch_miss_o) begin
-        req_valid_q       <= fetch_req_valid_i && !stall_i;
-        pipe2_way_valid_q <= req_way_valid;
-        req_offset_q      <= req_word_offset;
-        req_index_q       <= req_index;
-        req_tag_q         <= req_tag;
-        req_paddr_w_q     <= fetch_paddr_w_i;
+        req_offset_q      <= look_offset;
+        req_index_q       <= look_index;
+        req_tag_q         <= look_tag;
+        req_paddr_w_q     <= lookup_paddr_w;
       end
     end
   end
@@ -187,8 +170,7 @@ module sukuna_l1i_cache #(
   reg [WAY_BITS-1:0] victim_ptr_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg                miss_busy_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
-  wire ram_ren = (flush_i || (fetch_req_valid_i && !stall_i) || (pending_flush_req_q && !miss_busy_q));
-  wire [INDEX_BITS-1:0] ram_raddr = (pending_flush_req_q && !miss_busy_q) ? pending_paddr_w_q[5+INDEX_BITS:6] : req_index;
+  wire [INDEX_BITS-1:0] ram_raddr = look_index;
 
   genvar w;
   generate
@@ -206,12 +188,12 @@ module sukuna_l1i_cache #(
         .wen_i   (way_wen || fence_i_flush_i),
         .waddr_i (way_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_index),
         .wdata_i (fence_i_flush_i ? {(TAG_WIDTH+1){1'b0}} : {1'b1, req_tag_q}),
-        .ren_i   (ram_ren),
+        .ren_i   (pipe_advance),
         .raddr_i (ram_raddr),
         .rdata_o (tag_rdata[w])
       );
 
-      // Data Array (Stores 512-bit cache line)
+      // Data Array (Stores 512-bit cache line) - BRAM output kept continuously enabled
       sk_ram_bram #(
         .DATA_WIDTH     (CACHE_LINE_BITS),
         .ADDR_WIDTH     (INDEX_BITS),
@@ -225,7 +207,7 @@ module sukuna_l1i_cache #(
         .wstrb_i(1'b1),
         .waddr_i(req_paddr_w_q[5+INDEX_BITS:6]),
         .wdata_i(refill_line_data_i),
-        .ren_i  (ram_ren),
+        .ren_i  (1'b1),
         .raddr_i(ram_raddr),
         .rdata_o(data_rdata[w])
       );
@@ -241,18 +223,12 @@ module sukuna_l1i_cache #(
   // --------------------------------------------------------------------------
   wire hit = |way_hit;
 
-  wire [63:0] way_fetch64 [0:WAYS-1];
-  genvar iway;
-  generate
-    for (iway = 0; iway < WAYS; iway = iway + 1) begin : gen_way_fetch64
-      assign way_fetch64[iway] = data_rdata[iway][req_offset_q[3:1]*64 +: 64];
-    end
-  endgenerate
+  wire [511:0] hit_line = ({512{way_hit[0]}} & data_rdata[0]) |
+                          ({512{way_hit[1]}} & data_rdata[1]) |
+                          ({512{way_hit[2]}} & data_rdata[2]) |
+                          ({512{way_hit[3]}} & data_rdata[3]);
 
-  wire [63:0] hit_fetch64 = ({64{way_hit[0]}} & way_fetch64[0]) |
-                            ({64{way_hit[1]}} & way_fetch64[1]) |
-                            ({64{way_hit[2]}} & way_fetch64[2]) |
-                            ({64{way_hit[3]}} & way_fetch64[3]);
+  wire [63:0] hit_fetch64 = hit_line[req_offset_q[3:1]*64 +: 64];
 
   wire        refill_valid_use = refill_resp_valid_i && !discard_refill_q;
   wire [63:0] refill_fetch64   = refill_line_data_i[req_offset_q[3:1]*64 +: 64];
@@ -267,7 +243,7 @@ module sukuna_l1i_cache #(
   // --------------------------------------------------------------------------
   // Refill State Control & Replacement
   // --------------------------------------------------------------------------
-  assign refill_req_valid_o    = req_valid_q && !hit && !miss_busy_q && !pending_flush_req_q;
+  assign refill_req_valid_o    = req_valid_q && !hit && !miss_busy_q && !pending_flush_req_q && !flush_i;
   assign refill_line_paddr_w_o = {req_paddr_w_q[PADDR_WIDTH-1:6], 4'b0000}; // Line aligned
 
   always @(posedge clk_i or negedge rst_ni) begin
@@ -280,7 +256,7 @@ module sukuna_l1i_cache #(
     end else begin
       if (fence_i_flush_i) begin
         // flush handled by sk_ram_ff
-      end else if (flush_i && miss_busy_q && !refill_resp_valid_i && (fetch_paddr_w_i[PADDR_WIDTH-1:6] != req_paddr_w_q[PADDR_WIDTH-1:6])) begin
+      end else if (flush_i && miss_busy_q && !refill_resp_valid_i) begin
         discard_refill_q    <= 1'b1;
         pending_flush_req_q <= 1'b1;
         pending_paddr_w_q   <= fetch_paddr_w_i;

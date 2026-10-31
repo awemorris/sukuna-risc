@@ -38,12 +38,14 @@ module sk_div #(
   wire is_overflow = signed_mode_i && (dividend_i == {1'b1, {(WIDTH-1){1'b0}}}) && (divisor_i == {WIDTH{1'b1}});
 
   // Internal registers for multi-cycle iteration
-  reg [WIDTH-1:0]   acc_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [WIDTH-1:0]   quo_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [WIDTH-1:0]   div_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [5:0]         cnt_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg               neg_quo_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg               neg_rem_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [WIDTH-1:0]   acc_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [WIDTH-1:0]   quo_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [WIDTH-1:0]   div_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg [5:0]         cnt_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg               neg_quo_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg               neg_rem_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg               div_zero_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  reg               is_ovf_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // Next-step trial subtraction (single 64-bit adder, ~0.8 ns)
   wire [WIDTH:0] next_acc_trial = {acc_q[WIDTH-1:0], quo_q[WIDTH-1]};
@@ -66,53 +68,60 @@ module sk_div #(
       cnt_q       <= 6'd0;
       neg_quo_q   <= 1'b0;
       neg_rem_q   <= 1'b0;
+      div_zero_q  <= 1'b0;
+      is_ovf_q    <= 1'b0;
     end else if (flush_i) begin
       state_q     <= S_IDLE;
       ready_o     <= 1'b1;
       done_o      <= 1'b0;
+      div_zero_q  <= 1'b0;
+      is_ovf_q    <= 1'b0;
     end else begin
       done_o <= 1'b0;
 
       case (state_q)
         S_IDLE: begin
-          ready_o <= 1'b1;
+          ready_o    <= 1'b1;
+          neg_quo_q  <= signed_mode_i && (dividend_i[WIDTH-1] ^ divisor_i[WIDTH-1]);
+          neg_rem_q  <= signed_mode_i && dividend_i[WIDTH-1];
+          acc_q      <= {WIDTH{1'b0}};
+          quo_q      <= abs_dividend;
+          div_q      <= abs_divisor;
+          cnt_q      <= 6'd63;
+          div_zero_q <= div_by_zero_o;
+          is_ovf_q   <= is_overflow;
           if (start_i && ready_o) begin
             ready_o <= 1'b0;
-            if (div_by_zero_o) begin
-              quotient_o  <= {WIDTH{1'b1}};
-              remainder_o <= dividend_i;
-              done_o      <= 1'b1;
-              state_q     <= S_IDLE;
-            end else if (is_overflow) begin
-              quotient_o  <= dividend_i;
-              remainder_o <= {WIDTH{1'b0}};
-              done_o      <= 1'b1;
-              state_q     <= S_IDLE;
-            end else begin
-              neg_quo_q <= signed_mode_i && (dividend_i[WIDTH-1] ^ divisor_i[WIDTH-1]);
-              neg_rem_q <= signed_mode_i && dividend_i[WIDTH-1];
-              acc_q     <= {WIDTH{1'b0}};
-              quo_q     <= abs_dividend;
-              div_q     <= abs_divisor;
-              cnt_q     <= 6'd63;
-              state_q   <= S_CALC;
-            end
+            state_q <= S_CALC;
           end
         end
 
         S_CALC: begin
-          if (sub_ok) begin
-            acc_q <= sub_res[WIDTH-1:0];
-            quo_q <= {quo_q[WIDTH-2:0], 1'b1};
+          cnt_q <= cnt_q - 6'd1;
+          if (div_zero_q) begin
+            div_zero_q <= 1'b0;
+            is_ovf_q   <= 1'b0;
+            acc_q      <= quo_q;
+            quo_q      <= {WIDTH{1'b1}};
+            neg_quo_q  <= 1'b0;
+            state_q    <= S_DONE;
+          end else if (is_ovf_q) begin
+            is_ovf_q   <= 1'b0;
+            acc_q      <= {WIDTH{1'b0}};
+            neg_quo_q  <= 1'b0;
+            state_q    <= S_DONE;
           end else begin
-            acc_q <= next_acc_trial[WIDTH-1:0];
-            quo_q <= {quo_q[WIDTH-2:0], 1'b0};
-          end
+            if (sub_ok) begin
+              acc_q <= sub_res[WIDTH-1:0];
+              quo_q <= {quo_q[WIDTH-2:0], 1'b1};
+            end else begin
+              acc_q <= next_acc_trial[WIDTH-1:0];
+              quo_q <= {quo_q[WIDTH-2:0], 1'b0};
+            end
 
-          if (cnt_q == 6'd0) begin
-            state_q <= S_DONE;
-          end else begin
-            cnt_q <= cnt_q - 6'd1;
+            if (cnt_q == 6'd0) begin
+              state_q <= S_DONE;
+            end
           end
         end
 

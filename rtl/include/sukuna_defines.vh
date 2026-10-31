@@ -53,6 +53,15 @@
 `define L1_TLB_ENTRIES    8
 `define L2_TLB_ENTRIES    256
 
+// Execution Unit Multiplier Latencies (Configurable via build config)
+`ifndef MUL_LAT
+`define MUL_LAT           3
+`endif
+
+`ifndef FP_MUL_LAT
+`define FP_MUL_LAT        3
+`endif
+
 // AXI4 Parameters
 `define AXI_ADDR_WIDTH    64
 `define AXI_DATA_WIDTH    128

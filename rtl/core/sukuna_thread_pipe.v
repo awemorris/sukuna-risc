@@ -264,13 +264,12 @@ module sukuna_thread_pipe #(
   wire [4:0]      rf_waddr_p0, rf_waddr_p1, rf_waddr_p2;
   wire [XLEN-1:0] rf_wdata_p0, rf_wdata_p1, rf_wdata_p2;
 
-  // EX stage combinational bypass wires to ID3
-  wire            ex_comb_l0_val;
-  wire [4:0]      ex_comb_l0_rd;
-  wire [XLEN-1:0] ex_comb_l0_data;
-  wire            ex_comb_l1_val;
-  wire [4:0]      ex_comb_l1_rd;
-  wire [XLEN-1:0] ex_comb_l1_data;
+  // Pre-decoded Forwarding Select wires (ID3 -> EX) and MA1/MA2 Status (EX -> ID3)
+  wire [1:0]      fwd_sel_l0_rs1, fwd_sel_l0_rs2;
+  wire [1:0]      fwd_sel_l1_rs1, fwd_sel_l1_rs2;
+  wire [1:0]      fwd_sel_fpr_rs1, fwd_sel_fpr_rs2;
+  wire            ma_s1_valid, ma_s2_valid;
+  wire [4:0]      ma_s1_rd, ma_s2_rd;
 
   // WB -> CSR Unit Commit
   wire            wb_csr_commit_wen;
@@ -614,24 +613,26 @@ module sukuna_thread_pipe #(
     .rf_rdata_l1_rs2_i  (rf_rdata_l1_rs2),
     .fpr_rdata_l0_rs1_i (fpr_rdata_rs1),
     .fpr_rdata_l0_rs2_i (fpr_rdata_rs2),
-    .fwd_ex_fpr_val_i   (ex_wb_l0_writes_fpr),
+    .fwd_ex_fpr_val_i   (ex_wb_l0_valid && ex_wb_l0_writes_fpr),
     .fwd_ex_fpr_rd_i    (ex_wb_l0_rd),
     .fwd_ex_fpr_data_i  (ex_wb_l0_data),
-    .fwd_wb_fpr_val_i   (wb_fpr_wen),
-    .fwd_wb_fpr_rd_i    (wb_fpr_waddr),
-    .fwd_wb_fpr_data_i  (wb_fpr_wdata),
-    .fwd_ex_val_i       (ex_comb_l0_val),
-    .fwd_ex_rd_i        (ex_comb_l0_rd),
-    .fwd_ex_data_i      (ex_comb_l0_data),
-    .fwd_ex_l1_val_i    (ex_comb_l1_val),
-    .fwd_ex_l1_rd_i     (ex_comb_l1_rd),
-    .fwd_ex_l1_data_i   (ex_comb_l1_data),
-    .fwd_wb_l0_val_i    (ex_wb_l0_valid),
+    .fwd_wb_l0_val_i    (ex_wb_l0_valid && !ex_wb_l0_writes_fpr),
     .fwd_wb_l0_rd_i     (ex_wb_l0_rd),
     .fwd_wb_l0_data_i   (ex_wb_l0_data),
     .fwd_wb_l1_val_i    (ex_wb_l1_valid),
     .fwd_wb_l1_rd_i     (ex_wb_l1_rd),
     .fwd_wb_l1_data_i   (ex_wb_l1_data),
+    .ex_wb_slot1_older_i(ex_wb_slot1_older),
+    .ma_s1_valid_i      (ma_s1_valid),
+    .ma_s1_rd_i         (ma_s1_rd),
+    .ma_s2_valid_i      (ma_s2_valid),
+    .ma_s2_rd_i         (ma_s2_rd),
+    .ex_fwd_sel_l0_rs1_o(fwd_sel_l0_rs1),
+    .ex_fwd_sel_l0_rs2_o(fwd_sel_l0_rs2),
+    .ex_fwd_sel_l1_rs1_o(fwd_sel_l1_rs1),
+    .ex_fwd_sel_l1_rs2_o(fwd_sel_l1_rs2),
+    .ex_fwd_sel_fpr_rs1_o(fwd_sel_fpr_rs1),
+    .ex_fwd_sel_fpr_rs2_o(fwd_sel_fpr_rs2),
     .ex_l0_valid_o      (ex_l0_valid),
     .ex_l0_pc_o         (ex_l0_pc),
     .ex_l0_rd_o         (ex_l0_rd),
@@ -728,9 +729,6 @@ module sukuna_thread_pipe #(
     .ex_slot1_older_i   (ex_slot1_older),
     .fpr_src1_i         (ex_l0_fpr_src1),
     .fpr_src2_i         (ex_l0_fpr_src2),
-    .wb_fpr_wen_i       (wb_fpr_wen),
-    .wb_fpr_rd_i        (wb_fpr_waddr),
-    .wb_fpr_data_i      (wb_fpr_wdata),
     .csr_req_valid_o    (csr_req_valid),
     .csr_raddr_o        (csr_raddr),
     .csr_rwen_o         (csr_rwen),
@@ -788,12 +786,16 @@ module sukuna_thread_pipe #(
     .ex_wb_l1_cause_o   (ex_wb_l1_cause),
     .ex_wb_l1_tval_o    (ex_wb_l1_tval),
     .ex_wb_slot1_older_o(ex_wb_slot1_older),
-    .ex_comb_l0_val_o   (ex_comb_l0_val),
-    .ex_comb_l0_rd_o    (ex_comb_l0_rd),
-    .ex_comb_l0_data_o  (ex_comb_l0_data),
-    .ex_comb_l1_val_o   (ex_comb_l1_val),
-    .ex_comb_l1_rd_o    (ex_comb_l1_rd),
-    .ex_comb_l1_data_o  (ex_comb_l1_data)
+    .fwd_sel_l0_rs1_i   (fwd_sel_l0_rs1),
+    .fwd_sel_l0_rs2_i   (fwd_sel_l0_rs2),
+    .fwd_sel_l1_rs1_i   (fwd_sel_l1_rs1),
+    .fwd_sel_l1_rs2_i   (fwd_sel_l1_rs2),
+    .fwd_sel_fpr_rs1_i  (fwd_sel_fpr_rs1),
+    .fwd_sel_fpr_rs2_i  (fwd_sel_fpr_rs2),
+    .ma_s1_valid_o      (ma_s1_valid),
+    .ma_s1_rd_o         (ma_s1_rd),
+    .ma_s2_valid_o      (ma_s2_valid),
+    .ma_s2_rd_o         (ma_s2_rd)
   );
 
   // Shared EU Requests

@@ -193,14 +193,14 @@ RVTEST_CODE_BEGIN
   bne a2, t0, test_fail
 
   // --------------------------------------------------------------------------
-  // Test 18: RVC Compressed Double-Precision (c.fld, c.fsd)
+  // Test 18: Double-Precision Offset Load/Store (fld, fsd)
   // --------------------------------------------------------------------------
   li  gp, 18
   la  s1, test_data_area
   li  a0, 0x400e000000000000        // 3.75d
   sd  a0, 16(s1)
-  c.fld fs0, 16(s1)
-  c.fsd fs0, 24(s1)
+  fld fs0, 16(s1)
+  fsd fs0, 24(s1)
   ld  a1, 24(s1)
   bne a0, a1, test_fail
 

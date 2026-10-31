@@ -81,9 +81,10 @@ module sukuna_l1d_cache #(
   reg [XLEN-1:0]         req_wdata_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // State Machine for Miss & Eviction
-  localparam S_IDLE   = 2'd0;
-  localparam S_EVICT  = 2'd1;
-  localparam S_REFILL = 2'd2;
+  localparam S_IDLE        = 2'd0;
+  localparam S_EVICT       = 2'd1;
+  localparam S_REFILL      = 2'd2;
+  localparam S_REFILL_DONE = 2'd3;
 
   localparam WAY_BITS = (WAYS <= 2)  ? 1 :
                         (WAYS <= 4)  ? 2 :
@@ -187,7 +188,7 @@ module sukuna_l1d_cache #(
       req_tag_q            <= req_tag;
       req_paddr_w_q        <= mem_paddr_w_i;
       req_wdata_q          <= mem_wdata_i;
-    end else if (state_q == S_REFILL && l2_resp_valid_i) begin
+    end else if (state_q == S_REFILL_DONE) begin
       req_valid_q          <= 1'b0;
       pipe2_way_valid_q    <= {WAYS{1'b0}};
       pipe2_victim_valid_q <= 1'b0;
@@ -227,6 +228,9 @@ module sukuna_l1d_cache #(
       wire way_snoop_inv  = snoop_req_valid_i && snoop_invalidate_i && snoop_way_hit[w];
 
       // Tag Array ({dirty, valid, tag}) - Distributed RAM for fast 1-cycle tag comparison
+      wire [INDEX_BITS-1:0] dtag_raddr = snoop_req_valid_i ? snoop_index :
+                                         (state_q == S_REFILL) ? req_paddr_w_q[5+INDEX_BITS:6] : req_index;
+      wire [INDEX_BITS-1:0] ddata_raddr = (state_q == S_REFILL) ? req_paddr_w_q[5+INDEX_BITS:6] : req_index;
       sk_ram_dist #(
         .DATA_WIDTH (TAG_WIDTH + 2),
         .ADDR_WIDTH (INDEX_BITS),
@@ -239,8 +243,8 @@ module sukuna_l1d_cache #(
         .wdata_i (way_snoop_inv ? {(TAG_WIDTH+2){1'b0}} :
                   way_write_hit ? {1'b1, 1'b1, req_tag_q} :
                   way_refill_wen ? {req_write_q, 1'b1, req_tag_q} : {(TAG_WIDTH+2){1'b0}}),
-        .ren_i   (mem_req_valid_i || snoop_req_valid_i),
-        .raddr_i (snoop_req_valid_i ? snoop_index : req_index),
+        .ren_i   (mem_req_valid_i || snoop_req_valid_i || (state_q == S_REFILL && l2_resp_valid_i)),
+        .raddr_i (dtag_raddr),
         .rdata_o (tag_rdata[w])
       );
 
@@ -257,15 +261,15 @@ module sukuna_l1d_cache #(
         .rst_ni (rst_ni),
         .wen_i  (way_refill_wen || way_write_hit),
         .wstrb_i(way_refill_wen ? {64{1'b1}} : {56'd0, req_byte_en_q} << (req_offset_q[3:1] * 8)),
-        .waddr_i(way_refill_wen ? req_paddr_w_q[5+INDEX_BITS:6] : req_paddr_w_q[5+INDEX_BITS:6]),
+        .waddr_i(req_paddr_w_q[5+INDEX_BITS:6]),
         .wdata_i(way_refill_wen ? refill_wdata : {8{req_wdata_q}}),
-        .ren_i  (mem_req_valid_i),
-        .raddr_i(req_index),
+        .ren_i  (mem_req_valid_i || (state_q == S_REFILL && l2_resp_valid_i)),
+        .raddr_i(ddata_raddr),
         .rdata_o(data_rdata[w])
       );
 
-      assign way_hit[w]       = req_valid_q && pipe2_way_valid_q[w] &&
-                                (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q);
+      assign way_hit[w]       = (state_q == S_REFILL_DONE) ? (victim_ptr_q == w[WAY_BITS-1:0]) :
+                                (req_valid_q && pipe2_way_valid_q[w] && (tag_rdata[w][TAG_WIDTH-1:0] == req_tag_q));
       assign snoop_way_hit[w] = way_valid_out[w][snoop_index] &&
                                 (tag_rdata[w][TAG_WIDTH-1:0] == snoop_tag);
     end
@@ -277,26 +281,18 @@ module sukuna_l1d_cache #(
   wire hit = |way_hit;
   assign snoop_hit_o = |snoop_way_hit;
 
-  wire [XLEN-1:0] way_dword [0:WAYS-1];
-  genvar wi;
-  generate
-  for (wi = 0; wi < WAYS; wi = wi + 1) begin : gen_way_dword
-      assign way_dword[wi] = data_rdata[wi][req_offset_q[3:1]*64 +: 64];
-    end
-  endgenerate
+  wire [511:0] hit_line = ({512{way_hit[0]}} & data_rdata[0]) |
+                          ({512{way_hit[1]}} & data_rdata[1]) |
+                          ({512{way_hit[2]}} & data_rdata[2]) |
+                          ({512{way_hit[3]}} & data_rdata[3]);
 
-  wire [XLEN-1:0] hit_dword = ({XLEN{way_hit[0]}} & way_dword[0]) |
-                              ({XLEN{way_hit[1]}} & way_dword[1]) |
-                              ({XLEN{way_hit[2]}} & way_dword[2]) |
-                              ({XLEN{way_hit[3]}} & way_dword[3]);
+  wire [XLEN-1:0] hit_dword = hit_line[req_offset_q[3:1]*64 +: 64];
 
-  wire refill_done = (state_q == S_REFILL) && l2_resp_valid_i;
-  wire [XLEN-1:0] refill_dword = refill_wdata[req_offset_q[3:1]*64 +: 64];
-  wire [XLEN-1:0] eff_dword    = refill_done ? refill_dword : hit_dword;
+  wire refill_done = (state_q == S_REFILL_DONE);
 
   assign mem_req_ready_o  = !is_busy;
   assign mem_resp_valid_o = (hit && !is_busy) || refill_done;
-  assign mem_rdata_o      = eff_dword;
+  assign mem_rdata_o      = hit_dword;
   assign mem_miss_stall_o = (state_q != S_IDLE) && !refill_done;
 
   // --------------------------------------------------------------------------
@@ -351,9 +347,13 @@ module sukuna_l1d_cache #(
           l2_req_write_o <= 1'b0;
           if (l2_resp_valid_i) begin
             l2_req_valid_o <= 1'b0;
-            victim_ptr_q   <= (victim_ptr_q == MAX_WAY_IDX[WAY_BITS-1:0]) ? {WAY_BITS{1'b0}} : victim_ptr_q + 1'b1;
-            state_q        <= S_IDLE;
+            state_q        <= S_REFILL_DONE;
           end
+        end
+
+        S_REFILL_DONE: begin
+          victim_ptr_q <= (victim_ptr_q == MAX_WAY_IDX[WAY_BITS-1:0]) ? {WAY_BITS{1'b0}} : victim_ptr_q + 1'b1;
+          state_q      <= S_IDLE;
         end
 
         default: state_q <= S_IDLE;

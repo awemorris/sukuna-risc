@@ -58,15 +58,32 @@ module sukuna_l2_arbiter #(
     end
   endgenerate
 
-  assign l1i_req_ready_o    = {NUM_HARTS{l2_req_ready_i}};
-  assign l1i_line_data_o    = {NUM_HARTS{l2_resp_rdata_i}};
-
-  assign l1d_req_ready_o    = {NUM_HARTS{l2_req_ready_i}};
-  assign l1d_rline_data_o   = {NUM_HARTS{l2_resp_rdata_i}};
-
   assign ptw_req_ready_o    = l2_req_ready_i;
   assign ptw_resp_valid_o   = l2_resp_valid_i && (l2_resp_source_i == 4'd6);
   assign ptw_data_o         = l2_resp_rdata_i[`XLEN-1:0];
+
+  assign l1d_req_ready_o[0] = l2_req_ready_i && !ptw_req_valid_i;
+  generate
+    if (NUM_HARTS > 1) begin : gen_l1d_rdy1
+      assign l1d_req_ready_o[1] = l2_req_ready_i && !ptw_req_valid_i && !l1d_req_valid_i[0];
+    end
+    if (NUM_HARTS > 2) begin : gen_l1d_rdy2
+      assign l1d_req_ready_o[2] = l2_req_ready_i && !ptw_req_valid_i && !l1d_req_valid_i[0] && !l1d_req_valid_i[1];
+    end
+  endgenerate
+  assign l1d_rline_data_o   = {NUM_HARTS{l2_resp_rdata_i}};
+
+  wire any_l1d_req = |l1d_req_valid_i;
+  assign l1i_req_ready_o[0] = l2_req_ready_i && !ptw_req_valid_i && !any_l1d_req;
+  generate
+    if (NUM_HARTS > 1) begin : gen_l1i_rdy1
+      assign l1i_req_ready_o[1] = l2_req_ready_i && !ptw_req_valid_i && !any_l1d_req && !l1i_req_valid_i[0];
+    end
+    if (NUM_HARTS > 2) begin : gen_l1i_rdy2
+      assign l1i_req_ready_o[2] = l2_req_ready_i && !ptw_req_valid_i && !any_l1d_req && !l1i_req_valid_i[0] && !l1i_req_valid_i[1];
+    end
+  endgenerate
+  assign l1i_line_data_o    = {NUM_HARTS{l2_resp_rdata_i}};
 
   always @(*) begin
     l2_req_valid_o   = 1'b0;

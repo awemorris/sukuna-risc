@@ -338,16 +338,15 @@ module sukuna_stage_id1 #(
 
   wire can_dual = if2_valid0_i && if2_valid1_i &&
                   (type0_comb == 2'b01) && (type1_comb == 2'b10) &&
-                  (sys_op0 == `SYS_NONE) &&
-                  (br_type0 == `BR_NONE) &&
-                  (jump_type0 == `JUMP_NONE) &&
-                  !raw_hazard && !waw_hazard && !ma_eu_busy_i;
+                  !single_issue_l0 &&
+                  !raw_hazard && !waw_hazard;
+
+  wire _unused_id1 = &{1'b0, ma_eu_busy_i, 1'b0};
 
   wire will_hold_slot1 = if2_valid0_i && if2_valid1_i && !can_dual;
   assign id1_hold_slot1_o = will_hold_slot1;
 
-  assign consume_step_o = (flush_i || stall_i) ? 2'd0 :
-                          (!if2_valid0_i && !if2_valid1_i) ? 2'd0 :
+  assign consume_step_o = (!if2_valid0_i && !if2_valid1_i) ? 2'd0 :
                           will_hold_slot1 ? 2'd1 : 2'd2;
 
   // --------------------------------------------------------------------------
@@ -400,8 +399,8 @@ module sukuna_stage_id1 #(
         id1_inst0_o       <= if2_inst0_i;
         id1_type0_o       <= type0_comb;
         id1_rd0_o         <= l0_writes_rd ? if2_inst0_i[11:7] : 5'd0;
-        id1_rs1_0_o       <= (is_lui0 || is_auipc0 || is_jal0) ? 5'd0 : if2_inst0_i[19:15];
-        id1_rs2_0_o       <= (is_lui0 || is_auipc0 || is_jal0 || is_jalr0 || is_load0 || is_op_imm0 || is_opi32_0 || (is_amo0 && funct7_0[6:2] == 5'b00010)) ? 5'd0 : if2_inst0_i[24:20];
+        id1_rs1_0_o       <= (is_lui0 || is_auipc0 || is_jal0 || is_fence0 || (is_sys0 && (funct3_0 == 3'b000 || funct3_0[2]))) ? 5'd0 : if2_inst0_i[19:15];
+        id1_rs2_0_o       <= (is_lui0 || is_auipc0 || is_jal0 || is_jalr0 || is_load0 || is_op_imm0 || is_opi32_0 || is_sys0 || is_fence0 || (is_amo0 && funct7_0[6:2] == 5'b00010)) ? 5'd0 : if2_inst0_i[24:20];
         id1_imm0_o        <= imm_l0;
         id1_alu_op0_o     <= alu_op0_comb;
         id1_mem_op0_o     <= {amo_type0, (is_store0 || is_amo_write0), funct3_0};
