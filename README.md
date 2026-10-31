@@ -113,53 +113,144 @@ customized specifically for zedBSD's execution architecture:
                             (Isolated workload, cannot degrade UI or kernel latency)
 ```
 
-- **Hart 0 (T1: Kernel & System)**: Handles OS kernel syscalls, hardware device drivers, Wayland/DRM display compositor events, and platform external interrupts. Because the OS kernel has its own dedicated hardware thread, external device events and display synchronization are handled immediately without disturbing user applications.
-- **Hart 1 (T2: Foreground Interactive Task)**: Dedicated exclusively to the primary interactive thread of the foreground application. The user-facing app never suffers frame drops or stutter caused by background services or kernel preemption.
-- **Hart 2 (T3: Background Services)**: Handles background system daemons, periodic worker threads, compiler jobs, and non-interactive tasks. Even under heavy background workload, the interactive experience on Hart 1 remains instantaneous.
+- **Hart 0 (T1: Kernel & System)**: Handles OS kernel syscalls,
+    hardware device drivers, Wayland/DRM display compositor events,
+    and platform external interrupts. Because the OS kernel has its
+    own dedicated hardware thread, external device events and display
+    synchronization are handled immediately without disturbing user
+    applications.
+
+- **Hart 1 (T2: Foreground Interactive Task)**: Dedicated exclusively
+    to the primary interactive thread of the foreground
+    application. The user-facing app never suffers frame drops or
+    stutter caused by background services or kernel preemption.
+
+- **Hart 2 (T3: Background Services)**: Handles background system
+    daemons, periodic worker threads, compiler jobs, and
+    non-interactive tasks. Even under heavy background workload, the
+    interactive experience on Hart 1 remains instantaneous.
+
+Image and graphics processing are among the most computationally
+intensive tasks a processor faces. While handling these workloads on a
+GPU is significantly faster and far more energy-efficient, modern
+generic systems often suffer from driver fragmentation and API
+compatibility barriers—preventing workloads from being reliably
+offloaded and forcing the CPU to fall back to costly software
+rendering. Consequently, traditional generic CPUs are forced to bloat
+their silicon footprint simply to brute-force these heavy graphical
+loads.
+
+By co-designing the CPU, GPU, and OS (zedBSD) as a unified, seamless
+triad, we eliminate these compatibility barriers at the architectural
+level. Heavy rendering tasks are deterministically offloaded to the
+power-efficient GPU, allowing the CPU itself to remain exceptionally
+lightweight, compact, and energy-efficient.
+
+Furthermore, to maximize device responsiveness and deliver an
+ultra-fast, stutter-free UI/UX, dedicated hardware threads are
+allocated directly to system roles:
+
+- Hart 0 handles the OS kernel, device drivers, display compositor
+  events, and hardware interrupts with zero scheduling jitter.
+
+- Hart 1 is dedicated exclusively to the active foreground
+  application, ensuring silky-smooth interactivity free from
+  background preemption.
+
+Through this holistic, full-stack optimization, Sukuna-RISC achieves
+first-class computing performance without the silicon bloat or power
+penalties of conventional processors.
 
 ---
 
 ## 3. Minimalist Microarchitecture: Area & Power Optimization
 
-Every microarchitectural decision in Sukuna-RISC is guided by **minimizing area and switching energy while guaranteeing responsive single-cycle throughput**.
+Every microarchitectural decision in Sukuna-RISC is guided by
+**minimizing area and switching energy while guaranteeing responsive
+single-cycle throughput**.
 
 ### 3.1 Eliminating RVC: Area & Power Savings Over Variable Decompression
 
-While the RISC-V Compressed extension (RVC, 16-bit instructions) improves memory density on memory-starved microcontrollers, it imposes severe silicon area and power penalties on a high-throughput core:
+While the RISC-V Compressed extension (RVC, 16-bit instructions)
+improves memory density on memory-starved microcontrollers, it imposes
+severe silicon area and power penalties on a high-throughput core:
 
-1. **Elimination of Speculative Decompression Trees**: Supporting dual-issue with variable-length instructions requires parallel speculative decompression trees (C2 vs. C4 candidates) and dynamic crossbar multiplexers. Eliminating RVC cuts thousands of gates from the front-end.
-2. **Elimination of Cross-Boundary Reassembly Buffers**: Fixed 32-bit instructions never straddle 64-bit cache line boundaries at arbitrary 2-byte offsets. Multi-entry reassembly staging buffers are completely eradicated.
-3. **Direct Fixed-Wire Slicing**: Fetching a 64-bit word from the L1I cache yields two instructions by trivial, zero-cost wire slicing: `inst0 = rdata[31:0]` and `inst1 = rdata[63:32]`.
-4. **Energy Reduction**: Eliminating variable length instruction shifts removes wide multiplexing nets that switch on every single cycle, significantly lowering front-end dynamic power dissipation.
+1. **Elimination of Speculative Decompression Trees**: Supporting
+dual-issue with variable-length instructions requires parallel
+speculative decompression trees (C2 vs. C4 candidates) and dynamic
+crossbar multiplexers. Eliminating RVC cuts thousands of gates from
+the front-end.
+
+2. **Elimination of Cross-Boundary Reassembly Buffers**: Fixed 32-bit
+   instructions never straddle 64-bit cache line boundaries at
+   arbitrary 2-byte offsets. Multi-entry reassembly staging buffers
+   are completely eradicated.
+
+3. **Direct Fixed-Wire Slicing**: Fetching a 64-bit word from the L1I
+   cache yields two instructions by trivial, zero-cost wire slicing:
+   `inst0 = rdata[31:0]` and `inst1 = rdata[63:32]`.
+
+4. **Energy Reduction**: Eliminating variable length instruction
+   shifts removes wide multiplexing nets that switch on every single
+   cycle, significantly lowering front-end dynamic power dissipation.
 
 ### 3.2 Zero-MUX Addressing & Write-Enable (WEN) Freeze
 
-Multiplexers on 32-bit and 64-bit datapaths consume significant dynamic power, increase wire routing congestion, and demand larger silicon area. Sukuna-RISC uses **Write-Enable (WEN) gating and direct bit-slicing** to replace multiplexer arrays:
+Multiplexers on 32-bit and 64-bit datapaths consume significant
+dynamic power, increase wire routing congestion, and demand larger
+silicon area. Sukuna-RISC uses **Write-Enable (WEN) gating and direct
+bit-slicing** to replace multiplexer arrays:
 
-- **Zero-MUX Register File Addressing (ID1)**:
-  In RISC-V, register specifiers are located at fixed bit positions across all instruction formats:
-  `rs1 = inst[19:15]`, `rs2 = inst[24:20]`.
-  Instead of waiting for instruction decoding and routing addresses through multiplexers, instruction bit slices are wired directly to the register file RAM read ports.
-- **Non-Shifting Issue with WEN Freeze**:
-  When an instruction pair `[AAA, BBB]` is fetched and `AAA` issues alone while `BBB` must be held (due to hazard or single-issue constraint):
-  - Conventional cores shift `BBB` from Slot 1 into Slot 0 through a wide cross-lane multiplexer on the next cycle.
-  - Sukuna-RISC simply deasserts `wen_slot1 = 0` (clock-gating the flip-flop), leaving `BBB` stationary in Slot 1.
-  - On the next cycle, the next instruction `CCC` is fetched directly into Slot 0 (`wen_slot0 = 1`).
-  - The pair `[CCC, BBB]` is processed with zero datapath shifting multiplexers, drastically reducing silicon footprint and switching power.
-- **FMA Dual-Slot Occupancy (Zero Extra Register Ports)**:
-  Fused Multiply-Add (`FMA`: `rs1 * rs2 +/- rs3`) requires 3 source operands. Standard designs add a costly third read port (3R1W) to the floating-point register file (FPR), bloating RAM cell area by 40%–50%.
-  Sukuna-RISC instead issues FMA across both slots (`FMA / NOP`):
+- **Zero-MUX Register File Addressing (ID1)**: In RISC-V, register
+  specifiers are located at fixed bit positions across all instruction
+  formats: `rs1 = inst[19:15]`, `rs2 = inst[24:20]`.  Instead of
+  waiting for instruction decoding and routing addresses through
+  multiplexers, instruction bit slices are wired directly to the
+  register file RAM read ports.
+
+- **Non-Shifting Issue with WEN Freeze**: When an instruction pair
+  `[AAA, BBB]` is fetched and `AAA` issues alone while `BBB` must be
+  held (due to hazard or single-issue constraint):
+  - Conventional cores shift `BBB` from Slot 1 into Slot 0 through a
+    wide cross-lane multiplexer on the next cycle.
+  - Sukuna-RISC simply deasserts `wen_slot1 = 0` (clock-gating the
+    flip-flop), leaving `BBB` stationary in Slot 1.
+  - On the next cycle, the next instruction `CCC` is fetched directly
+    into Slot 0 (`wen_slot0 = 1`).
+  - The pair `[CCC, BBB]` is processed with zero datapath shifting
+    multiplexers, drastically reducing silicon footprint and switching
+    power.
+
+- **FMA Dual-Slot Occupancy (Zero Extra Register Ports)**: Fused
+  Multiply-Add (`FMA`: `rs1 * rs2 +/- rs3`) requires 3 source
+  operands. Standard designs add a costly third read port (3R1W) to
+  the floating-point register file (FPR), bloating RAM cell area by
+  40%–50%.  Sukuna-RISC instead issues FMA across both slots (`FMA /
+  NOP`):
   - Slot 0 reads `rs1` and `rs2`.
   - Slot 1 register port and bypass wiring are co-opted to read and transport `rs3`.
   - The FPR remains a compact 2-read-port macro with zero area overhead.
 
 ### 3.3 Conservative Voltage, High Timing Margin (ASIC & FPGA)
 
-Sukuna-RISC bounds combinational logic to **2 to 3 gate levels per stage**.
-Importantly, this low logic depth is **not intended to chase extreme, hot gigahertz clock rates**. Rather, it provides immense timing margin that enables:
-- **Low-Voltage Operation (Under-Volting)**: The processor easily meets its operating targets at lower, energy-efficient supply voltages (Vdd), achieving exponential dynamic power savings (power proportional to V^2).
-- **FPGA Synthesis without Routing Congestion**: On low-cost 28nm FPGA devices (e.g. Kintex-7 / Artix-7), the design easily closes timing at > 200 MHz without requiring aggressive floorplanning, high tool effort, or hot running silicon.
-- **Deterministic 1-Cycle Latencies**: Simple, balanced stages prevent unexpected multi-cycle stalls, ensuring predictable, smooth desktop interactivity.
+Sukuna-RISC bounds combinational logic to **2 to 3 gate levels per
+stage**.  Importantly, this low logic depth is **not intended to chase
+extreme, hot gigahertz clock rates**. Rather, it provides immense
+timing margin that enables:
+
+- **Low-Voltage Operation (Under-Volting)**: The processor easily
+    meets its operating targets at lower, energy-efficient supply
+    voltages (Vdd), achieving exponential dynamic power savings (power
+    proportional to V^2).
+
+- **FPGA Synthesis without Routing Congestion**: On low-cost 28nm FPGA
+    devices (e.g. Kintex-7 / Artix-7), the design easily closes timing
+    at > 200 MHz without requiring aggressive floorplanning, high tool
+    effort, or hot running silicon.
+
+- **Deterministic 1-Cycle Latencies**: Simple, balanced stages prevent
+    unexpected multi-cycle stalls, ensuring predictable, smooth
+    desktop interactivity.
 
 ---
 
@@ -202,8 +293,11 @@ Importantly, this low logic depth is **not intended to chase extreme, hot gigahe
 Conventional dual-issue designs assign dedicated functions to execution slots (e.g., Slot 0 = INT, Slot 1 = MA). When an `[MA, INT]` pair arrives, hundreds of datapath signals must be physically swapped through large multiplexers.
 
 Sukuna-RISC preserves natural physical instruction order through dedicated lanes:
-- **Lane 0 (Older)**: Carries the older instruction (`inst0`) in program order through to Writeback.
-- **Lane 1 (Younger)**: Carries the younger instruction (`inst1`) in program order through to Writeback.
+
+- **Lane 0 (Older)**: Carries the older instruction (`inst0`) in
+    program order through to Writeback.
+- **Lane 1 (Younger)**: Carries the younger instruction (`inst1`) in
+    program order through to Writeback.
 - **EX Enable Steering**:
   - **INT-EU**: Accepts operand busses from both Lane 0 and Lane 1. Driven by `int_en_l0` or `int_en_l1`.
   - **MA-EU**: Accepts operand busses from both Lane 0 and Lane 1. Driven by `ma_en_l0` or `ma_en_l1`.
@@ -211,9 +305,13 @@ Sukuna-RISC preserves natural physical instruction order through dedicated lanes
   - Issuing `[MA, INT]`: `ma_en_l0 = 1`, `int_en_l1 = 1`.
 
 #### Natural Precise Exception Guarantee
+
 Because Lane 0 is strictly older and Lane 1 is strictly younger:
-- If Lane 0 (e.g., MA load/store) triggers an exception (such as a page fault), Lane 1 commit is squashed by trivial gating:
-  `if (lane0_exception) commit_lane1 = 0;`
+
+- If Lane 0 (e.g., MA load/store) triggers an exception (such as a
+  page fault), Lane 1 commit is squashed by trivial gating: `if
+  (lane0_exception) commit_lane1 = 0;`
+
 - No speculative rename tables, history buffers, or reorder buffers are needed.
 
 ---
