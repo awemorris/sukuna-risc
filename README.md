@@ -1,12 +1,13 @@
-Sukuna-RISC
+Sukuna RISC
 ===========
 
-Sukuna-RISC is a CPU for the [zedBSD](https://github.com/awemorris/zedBSD)
-project.  It is an area- and energy-efficient 64-bit RISC-V processor core
-implemented in Verilog 2025.
+`Sukuna RISC` is a CPU for the
+[zedBSD](https://github.com/awemorris/zedBSD)
+project.  It is an area- and energy-efficient 64-bit RISC-V processor
+core implemented in Verilog 2025.
 
-The name Sukuna comes from Sukunahikona, literally meaning "Small
-Genius," with a double meaning of "reduced" of RISC.
+The name Sukuna comes from Sukunahikona, literally meaning
+"Small Genius," with a double meaning of "reduced" of RISC.
 
 zedBSD achieves exceptional efficiency and responsiveness by
 vertically optimizing the entire software stack from bottom to top,
@@ -16,15 +17,17 @@ this end-to-end integration completely eliminates software bloat, the
 computational demands placed on the underlying hardware are
 significantly lower.
 
-Through close hardware/software co-design with the zedBSD system,
-this Sukuna-RISC and [Amaterrace GPU](https://github.com/awemorris/amaterrace-gpu)
-was conceived to deliver a first-class computing experience with
-low power consumption, a tiny silicon die area, and low
-manufacturing cost. Rather than relying on brute-force power or
-chasing extreme clock frequencies, it embodies a minimal, elegant
-architecture, operating comfortably within conservative,
-nergy-efficient voltage and clock envelopes while being tailored
-specifically to fulfill the zedBSD user experience.
+Through close hardware/software co-design with the zedBSD system, this 
+[Sukuna-RISC](https://github.com/awemorris/sukuna-risc)
+and
+[Amaterrace GPU](https://github.com/awemorris/amaterrace-gpu)
+were conceived to deliver a first-class computing experience with low
+power consumption, a tiny silicon die area, and low manufacturing
+cost.  Rather than relying on brute-force power or chasing extreme
+clock frequencies, it embodies a minimal, elegant architecture,
+operating comfortably within conservative, nergy-efficient voltage and
+clock envelopes while being tailored specifically to fulfill the
+zedBSD user experience.
 
 ---
 
@@ -32,28 +35,38 @@ specifically to fulfill the zedBSD user experience.
 
 ### The zedBSD Ecosystem: End-to-End Vertical Co-Design
 
-Modern generic processors have become monstrously bloated. In order to
-brute-force through unoptimized, layered software stacks (excessive
-abstraction layers, bloated runtimes, inefficient IPC, and
-uncoordinated scheduling), conventional CPUs dedicate huge amounts of
-silicon to aggressive out-of-order execution windows, multi-level
-speculative branches, register renaming tables, deep reorder buffers,
-and massive caches. This brute-force approach demands exorbitant die
-area, drives up silicon cost, and burns excessive power.
+Modern generic processors have become monstrously bloated.  In order
+to brute-force through unoptimized, fat software stacks (excessive
+abstraction, bloated runtimes, inefficient IPC, and uncoordinated
+scheduling), conventional CPUs dedicate huge amounts of silicon to
+aggressive out-of-order execution windows, multi-level speculative
+branches, register renaming tables, deep reorder buffers, and massive
+caches. This brute-force approach demands exorbitant die area, drives
+up silicon cost, and burns excessive power.
 
-**Sukuna-RISC rejects this brute-force paradigm.**
+**Sukuna RISC rejects this brute-force paradigm.**
 
 This project is conceived and built as an indispensable part of
 **zedBSD**. zedBSD is an end-to-end, vertically integrated operating
 system and desktop environment optimized seamlessly from the ground
 up:
 
-- **Micro-optimized Unix Kernel**: Deterministic scheduler, zero-copy drivers, and lean kernel primitives.
-- **Direct GPU & DRM Drivers**: Low-overhead display rendering without bloated userspace abstraction layers.
-- **Lightweight System Services**: Clean, non-blocking asynchronous system services.
-- **Native Wayland Compositor & GUI Framework**: Ultra-responsive graphical interface with zero redundant buffer copies.
+- **Micro-optimized Unix Kernel**: Deterministic scheduler, zero-copy
+    drivers, and lean kernel primitives.
 
-Because the entire zedBSD software stack is vertically optimized from bottom to top, the computational demands imposed on the underlying hardware are drastically reduced. Software bloat is eliminated before it ever reaches the silicon.
+- **Direct GPU & DRM Drivers**: Low-overhead display rendering without
+    bloated userspace abstraction layers.
+
+- **Lightweight System Services**: Clean, non-blocking asynchronous
+    system services.
+
+- **Native Wayland Compositor & GUI Framework**: Ultra-responsive
+    graphical interface with zero redundant buffer copies.
+
+Because the entire zedBSD software stack is vertically optimized from
+bottom to top, the computational demands imposed on the underlying
+hardware are drastically reduced. Software bloat is eliminated before
+it ever reaches the silicon.
 
 ```
        +-------------------------------------------------------------+
@@ -82,18 +95,19 @@ designed the CPU and GPU themselves in tandem with zedBSD**.
 By co-designing the hardware and software:
 
 1. **Low Power Consumption & Modest Operating Voltage**: By keeping
-logic gates to only 2–3 levels per stage and using an in-order
-pipeline, the core operates at comfortable, power-efficient supply
-voltages with negligible dynamic switching energy.
+   logic gates to only 2–3 levels per stage and using an in-order
+   pipeline, the core operates at comfortable, power-efficient supply
+   voltages with negligible dynamic switching energy.
 
 2. **Minimal Silicon Die Area & Low Cost**: The core achieves its
-throughput with approximately 30k–100k LUTs on FPGA (a tiny fraction
-of a square millimeter in standard CMOS ASIC), drastically cutting
-silicon manufacturing costs.
+   throughput with approximately 30k–100k LUTs on FPGA (a tiny
+   fraction of a square millimeter in standard CMOS ASIC), drastically
+   cutting silicon manufacturing costs.
 
 3. **Hardware-Guaranteed Responsiveness**: SMT hardware threads are
-directly mapped to operating system roles, eliminating context-switch
-jitter and scheduling overhead for interactive desktop tasks.
+   directly mapped to operating system roles, eliminating
+   context-switch jitter and scheduling overhead for interactive
+   desktop tasks.
 
 ---
 
@@ -270,8 +284,8 @@ timing margin that enables:
 | **MMU** | Sv39 Virtual Memory | L1-ITLB (8 ent/thread), L1-DTLB (8 ent/thread), Shared L2-TLB (256 ent), Shared PTW |
 | **Interconnect** | Word-Addressed AXI4 | `[PADDR_WIDTH-1:2]` word addressing, 64/128-bit system bus interface |
 | **Privilege Modes** | M-Mode, S-Mode, U-Mode | Full RISC-V Privileged Spec v1.12 compliance |
-| **FPGA Footprint** | ~85k LUTs, 48k FFs | Measured on Kintex-7 KC705 with full SoC, 3-SMT, caches, MMU & FP |
-| **FPGA Clock** | **> 200 MHz** sustained | 204.12 MHz achieved with positive timing slack |
+| **FPGA Footprint** | 77.9k LUTs, 52.9k FFs, 272 BRAM Tiles, 78 DSPs | Measured on Kintex-7 KC705 (`sukuna_kc705_top`) with full SoC, 3-SMT, caches, MMU & FP |
+| **FPGA Clock** | **> 200 MHz** sustained | **200.16 MHz** achieved on full KC705 SoC top-level (`WNS = +0.004 ns`, `0` failing endpoints) |
 | **ASIC Potential** | 1.5 GHz - 1.7 GHz @ 5nm | 2–3 gate levels per stage; ideal for low-voltage, sub-watt operation |
 
 ---
@@ -555,12 +569,19 @@ Each hardware thread implements an independent `sukuna_csr_unit`:
 
 ## 9. Implementation & Timing Benchmark Results
 
-The design has been verified and benchmarked under Out-Of-Context (OOC) logic synthesis using **AMD/Xilinx Vivado 2026.1** targeting the **Kintex-7 KC705** (`xc7k325tffg900-2`) FPGA board at a reference clock of **200.00 MHz (Tclk = 5.000 ns)**:
+The design has been verified and benchmarked under full top-level and Out-Of-Context (OOC) logic synthesis using **AMD/Xilinx Vivado 2026.1** targeting the **Kintex-7 KC705** (`xc7k325tffg900-2`) FPGA board at a reference clock of **200.00 MHz (`Tclk = 5.000 ns`)**:
 
-- **CPU Core (`sukuna_core`)**: **203.87 MHz** (Slack: **+0.095 ns**, 84.5k LUTs, 47.8k FFs, 186 BRAMs, 78 DSPs) — **PASSED**
-- **L2 Cache*: 27.4k LUTs, 13.9k FFs, 60 BRAMs
-- **Sequential Pipeline Modules**: **30 / 30 modules (100%) meet timing >= 200 MHz**.
-- **Combinational Logic Blocks**: Evaluated under 5.0 ns virtual clocking; all critical paths exhibit propagation delays under 3.81 ns (equivalent to > 260 MHz), well within the 1-cycle timing envelope.
+- **Full KC705 SoC Top-Level (`sukuna_kc705_top`)**: **200.16 MHz** (Setup WNS: **`+0.004 ns`**, TNS: **`0.000 ns`**, **`0` / 178,393 failing endpoints**, Data Path: `4.852 ns`) — **PASSED**
+  - **Slice LUTs**: `77,951 / 203,800` (`38.25%` — `77,677` Logic LUTs, `274` Distributed RAM LUTs)
+  - **Slice Registers**: `52,907 / 407,600` (`12.98%` — `0` latches)
+  - **Block RAM Tiles**: `272 / 445` (`61.12%` — `256` `RAMB36E1`, `32` `RAMB18E1`)
+  - **DSP48E1 Slices**: `78 / 840` (`9.29%`)
+- **Cache Subsystem Modules (ASIC 5nm / 250 MHz Surrogate Linter @ `Tclk = 4.000 ns`, `0` Rule 1–5 Violations)**:
+  - **L1D Coherence (`sukuna_l1d_coherence`)**: **765.7 MHz** (`WNS = +2.694 ns`) — **PASSED**
+  - **L2 Arbiter (`sukuna_l2_arbiter`)**: **481.7 MHz** (`WNS = +1.924 ns`) — **PASSED**
+  - **Shared L2 Cache (`sukuna_l2_cache`, 256 KB)**: **266.5 MHz** (`WNS = +0.248 ns`) — **PASSED**
+  - **L1I Cache (`sukuna_l1i_cache`, 16 KB/thread)**: **255.2 MHz** (`WNS = +0.081 ns`) — **PASSED**
+  - **L1D Cache (`sukuna_l1d_cache`, 16 KB/thread, Non-Blocking Write-Allocate)**: **254.1 MHz** (`WNS = +0.064 ns`) — **PASSED**
 
 ---
 
