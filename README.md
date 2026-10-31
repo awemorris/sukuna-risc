@@ -562,21 +562,6 @@ The design has been verified and benchmarked under Out-Of-Context (OOC) logic sy
 - **Sequential Pipeline Modules**: **30 / 30 modules (100%) meet timing >= 200 MHz**.
 - **Combinational Logic Blocks**: Evaluated under 5.0 ns virtual clocking; all critical paths exhibit propagation delays under 3.81 ns (equivalent to > 260 MHz), well within the 1-cycle timing envelope.
 
-| Module | Category | Type | Fmax (MHz) | Data Path Delay (ns) | Slack (ns) | Slice LUTs | Slice FFs | Status |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `sukuna_top` | Top SoC | Seq | **204.12** | 4.873 | +0.101 | 195,582 | 65,033 | ✅ PASS |
-| `sukuna_core` | Top Core | Seq | **203.87** | 4.879 | +0.095 | 105,904 | 47,843 | ✅ PASS |
-| `sukuna_biu_axi4` | Bus Interface | Seq | **571.43** | 1.489 | +3.250 | 356 | 1,750 | ✅ PASS |
-| `sukuna_csr_unit` | Core Pipeline | Seq | **385.95** | 2.330 | +2.409 | 758 | 773 | ✅ PASS |
-| `sukuna_int_eu` | Execution Unit | Seq | **355.87** | 2.824 | +2.190 | 2,040 | 650 | ✅ PASS |
-| `sukuna_l1i_cache` | Cache Memory | Seq | **282.25** | 3.282 | +1.457 | 6,965 | 2,500 | ✅ PASS |
-| `sukuna_l1d_cache` | Cache Memory | Seq | **261.37** | 3.565 | +1.174 | 13,767 | 3,269 | ✅ PASS |
-| `sukuna_stage_ex` | Core Pipeline | Seq | **248.76** | 3.994 | +0.980 | 5,169 | 1,460 | ✅ PASS |
-| `sukuna_agu_eu` | Execution Unit | Seq | **247.95** | 4.007 | +0.967 | 805 | 384 | ✅ PASS |
-| `sukuna_l2_cache` | Cache Memory | Seq | **218.25** | 4.321 | +0.418 | 87,689 | 14,141 | ✅ PASS |
-| `sukuna_thread_pipe`| Core Pipeline | Seq | **206.74** | 4.576 | +0.163 | 15,467 | 8,717 | ✅ PASS |
-| `sukuna_stage_if2` | Core Pipeline | Seq | **203.83** | 4.880 | +0.094 | 1,498 | 456 | ✅ PASS |
-
 ---
 
 ## 10. Directory Structure
