@@ -270,7 +270,7 @@ timing margin that enables:
 | **MMU** | Sv39 Virtual Memory | L1-ITLB (8 ent/thread), L1-DTLB (8 ent/thread), Shared L2-TLB (256 ent), Shared PTW |
 | **Interconnect** | Word-Addressed AXI4 | `[PADDR_WIDTH-1:2]` word addressing, 64/128-bit system bus interface |
 | **Privilege Modes** | M-Mode, S-Mode, U-Mode | Full RISC-V Privileged Spec v1.12 compliance |
-| **FPGA Footprint** | ~105.9k LUTs, 47.8k FFs | Measured on Kintex-7 KC705 with full SoC, 3-SMT, caches, MMU & FP |
+| **FPGA Footprint** | ~85k LUTs, 48k FFs | Measured on Kintex-7 KC705 with full SoC, 3-SMT, caches, MMU & FP |
 | **FPGA Clock** | **> 200 MHz** sustained | 204.12 MHz achieved with positive timing slack |
 | **ASIC Potential** | 1.5 GHz - 1.7 GHz @ 5nm | 2–3 gate levels per stage; ideal for low-voltage, sub-watt operation |
 
@@ -557,8 +557,8 @@ Each hardware thread implements an independent `sukuna_csr_unit`:
 
 The design has been verified and benchmarked under Out-Of-Context (OOC) logic synthesis using **AMD/Xilinx Vivado 2026.1** targeting the **Kintex-7 KC705** (`xc7k325tffg900-2`) FPGA board at a reference clock of **200.00 MHz (Tclk = 5.000 ns)**:
 
-- **Top-Level SoC (`sukuna_top`)**: **204.12 MHz** (Slack: **+0.101 ns**, 195.6k LUTs, 65.0k FFs, 4 BRAMs, 48 DSPs) — **PASSED**
-- **CPU Core (`sukuna_core`)**: **203.87 MHz** (Slack: **+0.095 ns**, 105.9k LUTs, 47.8k FFs, 4 BRAMs, 48 DSPs) — **PASSED**
+- **CPU Core (`sukuna_core`)**: **203.87 MHz** (Slack: **+0.095 ns**, 84.5k LUTs, 47.8k FFs, 186 BRAMs, 78 DSPs) — **PASSED**
+- **L2 Cache*: 27.4k LUTs, 13.9k FFs, 60 BRAMs
 - **Sequential Pipeline Modules**: **30 / 30 modules (100%) meet timing >= 200 MHz**.
 - **Combinational Logic Blocks**: Evaluated under 5.0 ns virtual clocking; all critical paths exhibit propagation delays under 3.81 ns (equivalent to > 260 MHz), well within the 1-cycle timing envelope.
 
