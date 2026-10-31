@@ -69,7 +69,7 @@ Because the entire zedBSD software stack is vertically optimized from bottom to 
        +-------------------------------------------------------------+
        |        Sukuna-RISC: Minimalist, Co-Designed 3-SMT Core      |
        |  Hart 0: Kernel/Drivers | Hart 1: Foreground | Hart 2: Bkg  |
-       |  In-order 7-stage, Fixed-lane dual-issue, Zero-MUX datapath |
+       |  In-order 9-stage, Fixed-lane dual-issue, Zero-MUX datapath |
        +-------------------------------------------------------------+
 ```
 
@@ -170,7 +170,7 @@ Importantly, this low logic depth is **not intended to chase extreme, hot gigahe
 | **Target OS** | **zedBSD** | End-to-end vertically co-designed hardware/software stack |
 | **Architecture** | RISC-V RV64G | `RV64IMAFD` + `Zicsr` + `Zifencei`, pure 32-bit fixed-length |
 | **Hardware Threads** | 3-way SMT (1 Core / 3 Harts) | Hart 0: Kernel/Drivers/Display, Hart 1: Foreground UI, Hart 2: Background |
-| **Pipeline** | 7-13-stage In-Order | `IF1 -> IF2 -> ID1 -> ID2 -> ID3 -> EX (INT 1-stage/MEM 3-stage/FP N-stage) -> WB` |
+| **Pipeline** |9-stage In-Order | `IF1 -> IF2 -> ID1 -> ID2 -> ID3 -> EX (INT 1-stage/MEM 3-stage/FP N-stage) -> WB` |
 | **Issue Logic** | Asymmetric Dual-Issue | Fixed-lane (`Lane 0: Older`, `Lane 1: Younger`) with EX enable steering |
 | **Co-Issue Pairs** | `INT + MA` / `MA + INT` | Supported when no RAW/WAW hazard and MA is not stalled |
 | **L1 Instruction Cache** | 48 KB total (16 KB / thread) | Dedicated per thread, 4-way set-associative, word-addressed |
@@ -488,7 +488,7 @@ The design has been verified and benchmarked under Out-Of-Context (OOC) logic sy
 ├── rtl/                        # Synthesizable Verilog RTL source code
 │   ├── bus/                    # Bus Interface Unit (AXI4 BIU)
 │   ├── cache/                  # L1I, L1D, and Shared L2 Cache subsystems
-│   ├── core/                   # 7-stage pipelines, issue logic, execution units, CSRs
+│   ├── core/                   # 9-stage pipelines, issue logic, execution units, CSRs
 │   ├── include/                # Global architecture header files (sukuna_defines.vh)
 │   ├── interrupt/              # Platform interrupt controllers (PLIC, CLINT)
 │   ├── library/                # Arithmetic macros and technology-mapped RAM blocks
