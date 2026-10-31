@@ -11,9 +11,10 @@ Genius," with a double meaning of "reduced" of RISC.
 zedBSD achieves exceptional efficiency and responsiveness by
 vertically optimizing the entire software stack from bottom to top,
 including the kernel, direct GPU drivers, system services, Wayland
-compositor, and desktop applications.  Because this end-to-end
-integration completely eliminates software bloat, the computational
-demands placed on the underlying hardware are significantly lower.
+compositor, and desktop applications including a Web browser.  Because
+this end-to-end integration completely eliminates software bloat, the
+computational demands placed on the underlying hardware are
+significantly lower.
 
 Through close hardware/software co-design with the zedBSD system,
 this Sukuna-RISC and [Amaterrace GPU](https://github.com/awemorris/amaterrace-gpu)
