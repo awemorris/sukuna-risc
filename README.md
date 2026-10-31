@@ -74,18 +74,32 @@ Because the entire zedBSD software stack is vertically optimized from bottom to 
 
 ### First-Class Computing with Minimal Silicon & Low Power
 
-Rather than purchasing an oversized, expensive off-the-shelf CPU that spends most of its energy fighting software inefficiencies, **we designed the CPU itself in tandem with zedBSD**.
+Rather than purchasing an oversized, expensive off-the-shelf CPU that
+spends most of its energy fighting software inefficiencies, **we
+designed the CPU and GPU themselves in tandem with zedBSD**.
 
 By co-designing the hardware and software:
-1. **Low Power Consumption & Modest Operating Voltage**: By keeping logic gates to only 2–3 levels per stage and using an in-order pipeline, the core operates at comfortable, power-efficient supply voltages with negligible dynamic switching energy.
-2. **Minimal Silicon Die Area & Low Cost**: The core achieves its throughput with approximately 30k–100k LUTs on FPGA (a tiny fraction of a square millimeter in standard CMOS ASIC), drastically cutting silicon manufacturing costs.
-3. **Hardware-Guaranteed Responsiveness**: SMT hardware threads are directly mapped to operating system roles, eliminating context-switch jitter and scheduling overhead for interactive desktop tasks.
+
+1. **Low Power Consumption & Modest Operating Voltage**: By keeping
+logic gates to only 2–3 levels per stage and using an in-order
+pipeline, the core operates at comfortable, power-efficient supply
+voltages with negligible dynamic switching energy.
+
+2. **Minimal Silicon Die Area & Low Cost**: The core achieves its
+throughput with approximately 30k–100k LUTs on FPGA (a tiny fraction
+of a square millimeter in standard CMOS ASIC), drastically cutting
+silicon manufacturing costs.
+
+3. **Hardware-Guaranteed Responsiveness**: SMT hardware threads are
+directly mapped to operating system roles, eliminating context-switch
+jitter and scheduling overhead for interactive desktop tasks.
 
 ---
 
 ## 2. Hardware/Software Co-Designed Threading Strategy
 
-Sukuna-RISC implements 1 Core / 3 Hardware Threads (3-way SMT) customized specifically for zedBSD's execution architecture:
+Sukuna-RISC implements 1 Core / 3 Hardware Threads (3-way SMT)
+customized specifically for zedBSD's execution architecture:
 
 ```
 [ Hart 0 (Kernel) ]     --> Dedicated to Kernel, Drivers, Display Compositor & IRQs
