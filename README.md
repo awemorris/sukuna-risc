@@ -47,7 +47,7 @@ This project is conceived and built as an indispensable part of
 system and desktop environment optimized seamlessly from the ground
 up:
 
-- **Micro-optimized Unix Kernel**: Deterministic scheduler, zero-copy IPC, and lean kernel primitives.
+- **Micro-optimized Unix Kernel**: Deterministic scheduler, zero-copy drivers, and lean kernel primitives.
 - **Direct GPU & DRM Drivers**: Low-overhead display rendering without bloated userspace abstraction layers.
 - **Lightweight System Services**: Clean, non-blocking asynchronous system services.
 - **Native Wayland Compositor & GUI Framework**: Ultra-responsive graphical interface with zero redundant buffer copies.
