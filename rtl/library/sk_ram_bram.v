@@ -17,7 +17,8 @@ module sk_ram_bram #(
   parameter PIPELINE_STAGES = 1,                 // 1: single register, 2: two output registers
   parameter BYTE_WRITE_EN   = 1,
   parameter WE_WIDTH        = BYTE_WRITE_EN ? (DATA_WIDTH / 8) : 1,
-  parameter RAM_STYLE       = "block"
+  parameter RAM_STYLE       = "block",
+  parameter COLLISION_FWD   = 1
 )(
   input  wire                  clk_i,
   input  wire                  rst_ni,
@@ -71,29 +72,7 @@ module sk_ram_bram #(
     end
   endgenerate
 
-  // Forwarding register for simultaneous read/write collision
-  reg                   fwd_hit_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [DATA_WIDTH-1:0]  fwd_data_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [DATA_WIDTH-1:0]  fwd_mask_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-
-  integer bi;
-  always @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      fwd_hit_q  <= 1'b0;
-      fwd_data_q <= {DATA_WIDTH{1'b0}};
-      fwd_mask_q <= {DATA_WIDTH{1'b0}};
-    end else begin
-      fwd_hit_q  <= ren_i && wen_i && (waddr_i == raddr_i);
-      fwd_data_q <= wdata_i;
-      if (BYTE_WRITE_EN) begin
-        for (bi = 0; bi < WE_WIDTH; bi = bi + 1) begin
-          fwd_mask_q[bi*8 +: 8] <= {8{wstrb_i[bi]}};
-        end
-      end else begin
-        fwd_mask_q <= {DATA_WIDTH{1'b1}};
-      end
-    end
-  end
+  (* keep = "true" *) wire rst_async_p = !rst_ni;
 
   // Synchronous Read (Standard Xilinx BRAM inference template)
   always @(posedge clk_i) begin
@@ -102,11 +81,42 @@ module sk_ram_bram #(
     end
   end
 
-  wire [DATA_WIDTH-1:0] rdata_eff = fwd_hit_q ? ((fwd_data_q & fwd_mask_q) | (rdata_pipe_q & ~fwd_mask_q)) : rdata_pipe_q;
+  wire [DATA_WIDTH-1:0] rdata_eff;
+  generate
+    if (COLLISION_FWD) begin : gen_fwd
+      // Forwarding register for simultaneous read/write collision
+      reg                   fwd_hit_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+      reg [DATA_WIDTH-1:0]  fwd_data_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+      reg [DATA_WIDTH-1:0]  fwd_mask_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+
+      integer bi;
+      always @(posedge clk_i or posedge rst_async_p) begin
+        if (rst_async_p) begin
+          fwd_hit_q  <= 1'b0;
+          fwd_data_q <= {DATA_WIDTH{1'b0}};
+          fwd_mask_q <= {DATA_WIDTH{1'b0}};
+        end else begin
+          fwd_hit_q  <= ren_i && wen_i && (waddr_i == raddr_i);
+          fwd_data_q <= wdata_i;
+          if (BYTE_WRITE_EN) begin
+            for (bi = 0; bi < WE_WIDTH; bi = bi + 1) begin
+              fwd_mask_q[bi*8 +: 8] <= {8{wstrb_i[bi]}};
+            end
+          end else begin
+            fwd_mask_q <= {DATA_WIDTH{1'b1}};
+          end
+        end
+      end
+
+      assign rdata_eff = fwd_hit_q ? ((fwd_data_q & fwd_mask_q) | (rdata_pipe_q & ~fwd_mask_q)) : rdata_pipe_q;
+    end else begin : gen_no_fwd
+      assign rdata_eff = rdata_pipe_q;
+    end
+  endgenerate
 
   // Optional Pipeline Stage 2
-  always @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
+  always @(posedge clk_i or posedge rst_async_p) begin
+    if (rst_async_p) begin
       rdata_out_q <= {DATA_WIDTH{1'b0}};
     end else begin
       rdata_out_q <= rdata_eff;

@@ -71,6 +71,14 @@ module sukuna_stage_if2 #(
 
   wire resp_available = if1_valid_i && l1i_resp_valid_i;
 
+  // Pre-compute flip-flop-only instruction 0 source so l1i_inst_i goes through only 1 LUT5 to reg_inst0_q/D!
+  (* dont_touch = "true" *) wire        use_local_inst0 = (consume_step_i == 2'd1) || skid0_valid_q;
+  (* dont_touch = "true" *) wire [31:0] local_inst0     =
+    (consume_step_i == 2'd1) ? reg_inst1_q :
+    (skid0_odd_q             ? skid0_data_q[63:32] : skid0_data_q[31:0]);
+  wire [31:0] next_inst0 =
+    use_local_inst0 ? local_inst0 : (if1_odd_i ? l1i_inst_i[63:32] : l1i_inst_i[31:0]);
+
   // Registered outputs to ID1 stage (0-MUX, flop-to-flop inter-module boundary)
   assign if2_valid0_o = reg_valid0_q;
   assign if2_pc0_o    = reg_pc0_q;
@@ -98,126 +106,78 @@ module sukuna_stage_if2 #(
       skid1_pc_q    <= {XLEN{1'b0}};
       skid1_odd_q   <= 1'b0;
       skid1_valid_q <= 1'b0;
-    end else if (flush_i) begin
-      reg_valid0_q  <= 1'b0;
-      reg_valid1_q  <= 1'b0;
-
-      skid0_data_q  <= 64'd0;
-      skid0_pc_q    <= {XLEN{1'b0}};
-      skid0_odd_q   <= 1'b0;
-      skid0_valid_q <= 1'b0;
-
-      skid1_data_q  <= 64'd0;
-      skid1_pc_q    <= {XLEN{1'b0}};
-      skid1_odd_q   <= 1'b0;
-      skid1_valid_q <= 1'b0;
-    end else if (stall_i) begin
-      // When downstream is stalled, capture any in-flight L1I response into skid buffers
-      if (resp_available) begin
-        if (!skid0_valid_q) begin
-          skid0_data_q  <= l1i_inst_i;
-          skid0_pc_q    <= if1_pc_i;
-          skid0_odd_q   <= if1_odd_i;
-          skid0_valid_q <= 1'b1;
-        end else if (!skid1_valid_q) begin
-          skid1_data_q  <= l1i_inst_i;
-          skid1_pc_q    <= if1_pc_i;
-          skid1_odd_q   <= if1_odd_i;
-          skid1_valid_q <= 1'b1;
+    end else begin
+      // Skid datapath updates: decoupled from l1i_resp_valid_i (0 CE/D fanout from L1I tag hit!)
+      if (!skid0_valid_q || (!stall_i && (consume_step_i != 2'd1))) begin
+        if (skid0_valid_q && skid1_valid_q) begin
+          skid0_data_q <= skid1_data_q;
+          skid0_pc_q   <= skid1_pc_q;
+          skid0_odd_q  <= skid1_odd_q;
+        end else begin
+          skid0_data_q <= l1i_inst_i;
+          skid0_pc_q   <= if1_pc_i;
+          skid0_odd_q  <= if1_odd_i;
         end
       end
-    end else begin
-      if (consume_step_i == 2'd1) begin
-        // Slot 0 was consumed in cycle 1. Present Slot 1 on Lane 0 for cycle 2.
-        // Older (Slot 0) is NOPed! Younger (Slot 1) executes on Lane 0!
-        reg_valid0_q <= reg_valid1_q;
-        reg_pc0_q    <= reg_pc1_q;
-        reg_inst0_q  <= reg_inst1_q;
-        reg_valid1_q <= 1'b0;
-        reg_pc1_q    <= reg_pc1_q;
-        reg_inst1_q  <= 32'h00000013;
 
-        // If an in-flight response arrives from L1I while IF2 is holding Slot 1, capture into skid buffer
+      if (!skid1_valid_q || (!stall_i && (consume_step_i != 2'd1))) begin
+        skid1_data_q <= l1i_inst_i;
+        skid1_pc_q   <= if1_pc_i;
+        skid1_odd_q  <= if1_odd_i;
+      end
+
+      // Main stage datapath updates: decoupled from l1i_resp_valid_i (0 CE/D fanout from L1I tag hit!)
+      if (!stall_i) begin
+        reg_inst0_q <= next_inst0;
+        if (consume_step_i == 2'd1) begin
+          reg_pc0_q <= reg_pc1_q;
+        end else if (skid0_valid_q) begin
+          reg_pc0_q   <= skid0_odd_q ? {skid0_pc_q[XLEN-1:3], 3'b100} : skid0_pc_q;
+          reg_pc1_q   <= {skid0_pc_q[XLEN-1:3], 3'b100};
+          reg_inst1_q <= skid0_data_q[63:32];
+        end else begin
+          reg_pc0_q   <= if1_odd_i ? {if1_pc_i[XLEN-1:3], 3'b100} : if1_pc_i;
+          reg_pc1_q   <= {if1_pc_i[XLEN-1:3], 3'b100};
+          reg_inst1_q <= l1i_inst_i[63:32];
+        end
+      end
+
+      // Valid control bits (only 4 single-bit flip-flops depend on resp_available / l1i_resp_valid_i!)
+      if (flush_i) begin
+        reg_valid0_q  <= 1'b0;
+        reg_valid1_q  <= 1'b0;
+        skid0_valid_q <= 1'b0;
+        skid1_valid_q <= 1'b0;
+      end else if (stall_i) begin
         if (resp_available) begin
           if (!skid0_valid_q) begin
-            skid0_data_q  <= l1i_inst_i;
-            skid0_pc_q    <= if1_pc_i;
-            skid0_odd_q   <= if1_odd_i;
             skid0_valid_q <= 1'b1;
           end else if (!skid1_valid_q) begin
-            skid1_data_q  <= l1i_inst_i;
-            skid1_pc_q    <= if1_pc_i;
-            skid1_odd_q   <= if1_odd_i;
             skid1_valid_q <= 1'b1;
           end
         end
-      end else begin
-        // Block completed (consume_step == 2 or 0)
-        if (skid0_valid_q) begin
-          // Drain skid0 buffer to main output registers
-          if (skid0_odd_q) begin
-            // Odd target: Slot 0 was before target; Slot 1 is the single target instruction
-            reg_valid0_q <= 1'b1;
-            reg_pc0_q    <= {skid0_pc_q[XLEN-1:3], 3'b100};
-            reg_inst0_q  <= skid0_data_q[63:32];
-            reg_valid1_q <= 1'b0;
-            reg_pc1_q    <= {skid0_pc_q[XLEN-1:3], 3'b100};
-            reg_inst1_q  <= 32'h00000013;
-          end else begin
-            reg_valid0_q <= 1'b1;
-            reg_pc0_q    <= skid0_pc_q;
-            reg_inst0_q  <= skid0_data_q[31:0];
-            reg_valid1_q <= 1'b1;
-            reg_pc1_q    <= {skid0_pc_q[XLEN-1:3], 3'b100};
-            reg_inst1_q  <= skid0_data_q[63:32];
-          end
-
-          // Advance skid1 into skid0
-          if (skid1_valid_q) begin
-            skid0_data_q  <= skid1_data_q;
-            skid0_pc_q    <= skid1_pc_q;
-            skid0_odd_q   <= skid1_odd_q;
+      end else if (consume_step_i == 2'd1) begin
+        reg_valid0_q <= reg_valid1_q;
+        reg_valid1_q <= 1'b0;
+        if (resp_available) begin
+          if (!skid0_valid_q) begin
             skid0_valid_q <= 1'b1;
-            if (resp_available) begin
-              skid1_data_q  <= l1i_inst_i;
-              skid1_pc_q    <= if1_pc_i;
-              skid1_odd_q   <= if1_odd_i;
-              skid1_valid_q <= 1'b1;
-            end else begin
-              skid1_valid_q <= 1'b0;
-            end
-          end else begin
-            // skid1 is empty
-            if (resp_available) begin
-              skid0_data_q  <= l1i_inst_i;
-              skid0_pc_q    <= if1_pc_i;
-              skid0_odd_q   <= if1_odd_i;
-              skid0_valid_q <= 1'b1;
-            end else begin
-              skid0_valid_q <= 1'b0;
-            end
+          end else if (!skid1_valid_q) begin
+            skid1_valid_q <= 1'b1;
           end
-        end else if (resp_available) begin
-          if (if1_odd_i) begin
-            // Odd target: Slot 0 was before target; Slot 1 is the single target instruction
-            reg_valid0_q <= 1'b1;
-            reg_pc0_q    <= {if1_pc_i[XLEN-1:3], 3'b100};
-            reg_inst0_q  <= l1i_inst_i[63:32];
-            reg_valid1_q <= 1'b0;
-            reg_pc1_q    <= {if1_pc_i[XLEN-1:3], 3'b100};
-            reg_inst1_q  <= 32'h00000013;
-          end else begin
-            reg_valid0_q <= 1'b1;
-            reg_pc0_q    <= if1_pc_i;
-            reg_inst0_q  <= l1i_inst_i[31:0];
-            reg_valid1_q <= 1'b1;
-            reg_pc1_q    <= {if1_pc_i[XLEN-1:3], 3'b100};
-            reg_inst1_q  <= l1i_inst_i[63:32];
-          end
-        end else begin
-          reg_valid0_q <= 1'b0;
-          reg_valid1_q <= 1'b0;
         end
+      end else if (skid0_valid_q) begin
+        reg_valid0_q <= 1'b1;
+        reg_valid1_q <= !skid0_odd_q;
+        if (skid1_valid_q) begin
+          skid0_valid_q <= 1'b1;
+          skid1_valid_q <= resp_available;
+        end else begin
+          skid0_valid_q <= resp_available;
+        end
+      end else begin
+        reg_valid0_q <= resp_available;
+        reg_valid1_q <= resp_available && !if1_odd_i;
       end
     end
   end

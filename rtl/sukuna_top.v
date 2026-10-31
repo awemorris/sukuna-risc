@@ -112,6 +112,9 @@ module sukuna_top #(
   wire                       l2_resp_valid;
   wire [3:0]                 l2_resp_source;
   wire [CACHE_LINE_BITS-1:0] l2_resp_rdata;
+  wire                       l2_back_inv_valid;
+  wire [PADDR_WIDTH-1:2]     l2_back_inv_paddr_w;
+  wire                       l2_cache_write_pending;
 
   // L2 Cache <-> BIU wires
   wire                       mem_req_valid;
@@ -122,54 +125,7 @@ module sukuna_top #(
   wire                       mem_resp_valid;
   wire [CACHE_LINE_BITS-1:0] mem_resp_rdata;
 
-  // --------------------------------------------------------------------------
-  // Core to Shared L2 Cache Request Decoupling Pipeline Register
-  // --------------------------------------------------------------------------
-  reg                       core_req_valid_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg                       core_req_write_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [3:0]                 core_req_source_q;  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg [PADDR_WIDTH-1:2]     core_req_paddr_w_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-
-  wire                      l2_cache_req_ready;
-  wire                      core_req_busy = core_req_valid_q && !l2_cache_req_ready;
-
-  // 512-bit Core Request Write Data Buffer instantiated via sk_ram_ff macro
-  wire [CACHE_LINE_BITS-1:0] core_req_wdata_q;
-
-  sk_ram_ff #(
-    .DATA_WIDTH (CACHE_LINE_BITS),
-    .ADDR_WIDTH (1),
-    .DEPTH      (1),
-    .ZERO_REG0  (0)
-  ) u_core_req_wdata_ram (
-    .clk_i    (clk_i),
-    .rst_ni   (core_rst_n),
-    .wen_i    (!core_req_busy),
-    .waddr_i  (1'b0),
-    .wdata_i  (l2_req_wdata),
-    .wen1_i   (1'b0), .waddr1_i(1'b0), .wdata1_i({CACHE_LINE_BITS{1'b0}}),
-    .wen2_i   (1'b0), .waddr2_i(1'b0), .wdata2_i({CACHE_LINE_BITS{1'b0}}),
-    .raddr_a_i(1'b0),
-    .rdata_a_o(core_req_wdata_q),
-    .raddr_b_i(1'b0),
-    .rdata_b_o()
-  );
-
-  always @(posedge clk_i or negedge core_rst_n) begin
-    if (!core_rst_n) begin
-      core_req_valid_q   <= 1'b0;
-      core_req_write_q   <= 1'b0;
-      core_req_source_q  <= 4'd0;
-      core_req_paddr_w_q <= {(PADDR_WIDTH-2){1'b0}};
-    end else if (!core_req_busy) begin
-      core_req_valid_q   <= l2_req_valid;
-      core_req_write_q   <= l2_req_write;
-      core_req_source_q  <= l2_req_source;
-      core_req_paddr_w_q <= l2_req_paddr_w;
-    end
-  end
-
-  assign l2_req_ready = !core_req_busy;
+  wire l2_write_pending = (l2_req_valid && l2_req_write) || l2_cache_write_pending;
 
   // --------------------------------------------------------------------------
   // Dedicated Uncached & MMIO Controller
@@ -282,6 +238,9 @@ module sukuna_top #(
     .l2_resp_valid_i (l2_resp_valid),
     .l2_resp_source_i(l2_resp_source),
     .l2_resp_rdata_i (l2_resp_rdata),
+    .l2_back_inv_valid_i  (l2_back_inv_valid),
+    .l2_back_inv_paddr_w_i(l2_back_inv_paddr_w),
+    .l2_write_pending_i   (l2_write_pending),
 
     .uncached_req_valid_o  (uncached_core_req_valid),
     .uncached_req_write_o  (uncached_core_req_write),
@@ -303,15 +262,18 @@ module sukuna_top #(
   ) u_l2_cache (
     .clk_i           (clk_i),
     .rst_ni          (core_rst_n),
-    .req_valid_i     (core_req_valid_q),
-    .req_write_i     (core_req_write_q),
-    .req_source_i    (core_req_source_q),
-    .req_paddr_w_i   (core_req_paddr_w_q),
-    .req_wdata_i     (core_req_wdata_q),
-    .req_ready_o     (l2_cache_req_ready),
+    .req_valid_i     (l2_req_valid),
+    .req_write_i     (l2_req_write),
+    .req_source_i    (l2_req_source),
+    .req_paddr_w_i   (l2_req_paddr_w),
+    .req_wdata_i     (l2_req_wdata),
+    .req_ready_o     (l2_req_ready),
     .resp_valid_o    (l2_resp_valid),
     .resp_source_o   (l2_resp_source),
     .resp_rdata_o    (l2_resp_rdata),
+    .back_inv_valid_o  (l2_back_inv_valid),
+    .back_inv_paddr_w_o(l2_back_inv_paddr_w),
+    .write_pending_o   (l2_cache_write_pending),
     .mem_req_valid_o (mem_req_valid),
     .mem_req_write_o (mem_req_write),
     .mem_req_paddr_w_o(mem_req_paddr_w),

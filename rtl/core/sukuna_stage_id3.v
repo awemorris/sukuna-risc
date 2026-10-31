@@ -120,9 +120,9 @@ module sukuna_stage_id3 #(
   output reg              ex_l1_use_imm_o,    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // Control Enable Bits to EX
-  output reg              ex_int_en_l0_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  (* max_fanout = 8 *) output reg ex_int_en_l0_o, /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              ex_int_en_l1_o,     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  output reg              ex_ma_en_l0_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  (* max_fanout = 8 *) output reg ex_ma_en_l0_o,  /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   output reg              ex_ma_en_l1_o,      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // Source Register Specifiers for EX Hazard/Forwarding
@@ -313,21 +313,12 @@ module sukuna_stage_id3 #(
       ex_fwd_sel_fpr_rs1_o <= FWD_NONE;
       ex_fwd_sel_fpr_rs2_o <= FWD_NONE;
     end else begin
-      if (flush_i) begin
-        ex_l0_valid_o  <= 1'b0;
-        ex_l1_valid_o  <= 1'b0;
-        ex_int_en_l0_o <= 1'b0;
-        ex_int_en_l1_o <= 1'b0;
-        ex_ma_en_l0_o  <= 1'b0;
-        ex_ma_en_l1_o  <= 1'b0;
-      end else if (!stall_i) begin
-        ex_l0_valid_o  <= id2_valid0_i;
-        ex_l1_valid_o  <= id2_valid1_i;
-        ex_int_en_l0_o <= id2_int_en_l0_i;
-        ex_int_en_l1_o <= id2_int_en_l1_i;
-        ex_ma_en_l0_o  <= id2_ma_en_l0_i;
-        ex_ma_en_l1_o  <= id2_ma_en_l1_i;
-      end
+      ex_l0_valid_o  <= !flush_i && (stall_i ? ex_l0_valid_o  : id2_valid0_i);
+      ex_l1_valid_o  <= !flush_i && (stall_i ? ex_l1_valid_o  : id2_valid1_i);
+      ex_int_en_l0_o <= !flush_i && (stall_i ? ex_int_en_l0_o : id2_int_en_l0_i);
+      ex_int_en_l1_o <= !flush_i && (stall_i ? ex_int_en_l1_o : id2_int_en_l1_i);
+      ex_ma_en_l0_o  <= !flush_i && (stall_i ? ex_ma_en_l0_o  : id2_ma_en_l0_i);
+      ex_ma_en_l1_o  <= !flush_i && (stall_i ? ex_ma_en_l1_o  : id2_ma_en_l1_i);
 
       if (!stall_i) begin
         ex_slot1_older_o     <= id2_slot1_older_i;

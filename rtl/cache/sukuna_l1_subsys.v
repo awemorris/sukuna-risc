@@ -38,6 +38,11 @@ module sukuna_l1_subsys #(
   output wire [NUM_HARTS-1:0]                   mem_resp_valid_o,
   output wire [NUM_HARTS*XLEN-1:0]              mem_rdata_o,
   output wire [NUM_HARTS-1:0]                   mem_miss_stall_o,
+  output wire [NUM_HARTS-1:0]                   l1d_sbuf_empty_o,
+
+  // Snoop invalidation outputs to AGU (for multi-Hart LR/SC reservation clearing)
+  output wire [NUM_HARTS-1:0]                   snoop_inv_valid_o,
+  output wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0]   snoop_inv_paddr_w_o,
 
   // PTW PTE Read Interface
   input  wire                                   ptw_req_valid_i,
@@ -57,6 +62,10 @@ module sukuna_l1_subsys #(
   input  wire                                   l2_resp_valid_i,
   input  wire [3:0]                             l2_resp_source_i,
   input  wire [CACHE_LINE_BITS-1:0]             l2_resp_rdata_i,
+
+  // Inclusive L2 Back-Invalidation on L2 Eviction
+  input  wire                                   l2_back_inv_valid_i,
+  input  wire [PADDR_WIDTH-1:2]                 l2_back_inv_paddr_w_i,
 
   // FENCE.I invalidation
   input  wire [NUM_HARTS-1:0]                   fence_i_flush_i
@@ -83,6 +92,8 @@ module sukuna_l1_subsys #(
   wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0]   snoop_paddr_w;
   wire [NUM_HARTS-1:0]                   snoop_invalidate;
   wire [NUM_HARTS-1:0]                   snoop_hit;
+  wire [NUM_HARTS-1:0]                   amo_lock_req;
+  wire [NUM_HARTS-1:0]                   amo_lock_grant;
 
   genvar h;
   generate
@@ -128,6 +139,9 @@ module sukuna_l1_subsys #(
         .mem_resp_valid_o   (mem_resp_valid_o[h]),
         .mem_rdata_o        (mem_rdata_o[h*XLEN +: XLEN]),
         .mem_miss_stall_o   (mem_miss_stall_o[h]),
+        .sbuf_empty_o       (l1d_sbuf_empty_o[h]),
+        .amo_lock_req_o     (amo_lock_req[h]),
+        .amo_lock_grant_i   (amo_lock_grant[h]),
         .snoop_req_valid_i  (snoop_req_valid[h]),
         .snoop_paddr_w_i    (snoop_paddr_w[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
         .snoop_invalidate_i (snoop_invalidate[h]),
@@ -143,19 +157,24 @@ module sukuna_l1_subsys #(
     end
   endgenerate
 
-  // Coherence Controller
+  assign snoop_inv_valid_o   = snoop_req_valid & snoop_invalidate;
+  assign snoop_inv_paddr_w_o = snoop_paddr_w;
+
+  // Coherence Controller (Triggered at L2 Arbiter Store Serialization Point + L2 Back-Invalidate)
   sukuna_l1d_coherence #(
     .NUM_HARTS  (NUM_HARTS),
     .PADDR_WIDTH(PADDR_WIDTH)
   ) u_coherence (
-    .clk_i              (clk_i),
-    .rst_ni             (rst_ni),
-    .l1d_write_req_i    (mem_req_valid_i & mem_req_write_i),
-    .l1d_write_paddr_w_i(mem_paddr_w_i),
-    .snoop_req_valid_o  (snoop_req_valid),
-    .snoop_paddr_w_o    (snoop_paddr_w),
-    .snoop_invalidate_o (snoop_invalidate),
-    .snoop_hit_i        (snoop_hit)
+    .clk_i                (clk_i),
+    .rst_ni               (rst_ni),
+    .l1d_write_req_i      (l1d_refill_req_valid & l1d_refill_req_write & l1d_refill_req_ready),
+    .l1d_write_paddr_w_i  (l1d_refill_line_paddr_w),
+    .l2_back_inv_valid_i  (l2_back_inv_valid_i),
+    .l2_back_inv_paddr_w_i(l2_back_inv_paddr_w_i),
+    .snoop_req_valid_o    (snoop_req_valid),
+    .snoop_paddr_w_o      (snoop_paddr_w),
+    .snoop_invalidate_o   (snoop_invalidate),
+    .snoop_hit_i          (snoop_hit)
   );
 
   // L2 Crossbar Arbiter
@@ -178,6 +197,9 @@ module sukuna_l1_subsys #(
     .l1d_req_ready_o  (l1d_refill_req_ready),
     .l1d_resp_valid_o (l1d_refill_resp_valid),
     .l1d_rline_data_o (l1d_refill_rline_data),
+    .amo_lock_req_i   (amo_lock_req),
+    .amo_lock_grant_o (amo_lock_grant),
+    .snoop_busy_i     (|snoop_req_valid),
     .ptw_req_valid_i  (ptw_req_valid_i),
     .ptw_paddr_w_i    (ptw_paddr_w_i),
     .ptw_req_ready_o  (ptw_req_ready_o),

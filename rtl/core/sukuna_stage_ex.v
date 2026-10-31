@@ -118,6 +118,9 @@ module sukuna_stage_ex #(
   input  wire                   l1d_resp_valid_i,
   input  wire [XLEN-1:0]        l1d_rdata_i,
   input  wire                   l1d_miss_stall_i,
+  input  wire                   l1d_sbuf_empty_i,
+  input  wire                   snoop_inv_valid_i,
+  input  wire [PADDR_WIDTH-1:2] snoop_inv_paddr_w_i,
 
   // Dedicated Uncached / MMIO Port
   output wire                   uncached_req_valid_o,
@@ -325,7 +328,9 @@ module sukuna_stage_ex #(
   wire l0_op_is_sys = (l0_sys_op_i == `SYS_CSRRW) || (l0_sys_op_i == `SYS_CSRRS) ||
                       (l0_sys_op_i == `SYS_CSRRC) || (l0_sys_op_i == `SYS_PRIV);
   wire l0_int_req   = l0_valid_i && int_en_l0_i && !l0_op_is_fp && !l0_op_is_sys;
-  wire int_valid    = !int_freeze && (l0_int_req || (int_en_l1_i && l1_valid_i && !l0_redirect_taken));
+  // Note: ID1 never pairs a branch/jump on Lane 0 with Lane 1 (l1_valid_i == 0 when branch/jump),
+  // so int_valid and ma_valid do not depend on l0_redirect_taken!
+  wire int_valid    = !int_freeze && (l0_int_req || (int_en_l1_i && l1_valid_i));
 
   // Operand 1 selection
   wire [XLEN-1:0] int_src1_l0 = (is_jump0 || l0_use_pc_i) ? l0_pc_i : fwd_l0_src1;
@@ -410,7 +415,7 @@ module sukuna_stage_ex #(
   // --------------------------------------------------------------------------
   // MA-EU Selection & Pipelined Load-Hazard Stall Logic
   // --------------------------------------------------------------------------
-  wire ma_valid = (ma_en_l0_i && l0_valid_i) || (ma_en_l1_i && l1_valid_i && !l0_redirect_taken);
+  wire ma_valid = (ma_en_l0_i && l0_valid_i) || (ma_en_l1_i && l1_valid_i);
   wire [XLEN-1:0] ma_pc     = ma_en_l0_i ? l0_pc_i     : l1_pc_i;
   wire [7:0]      ma_op     = ma_en_l0_i ? l0_mem_op_i : l1_mem_op_i;
   wire [4:0]      ma_rd     = ma_en_l0_i ? l0_rd_i     : l1_rd_i;
@@ -456,8 +461,8 @@ module sukuna_stage_ex #(
     .s2_rd_o            (ma_s2_rd),
     .s2_is_fp_o         (ma_s2_is_fp),
     .miss_or_amo_stall_o(ma_miss_or_amo_stall),
-    .snoop_inv_valid_i  (1'b0),
-    .snoop_inv_paddr_w_i({(PADDR_WIDTH-2){1'b0}}),
+    .snoop_inv_valid_i  (snoop_inv_valid_i),
+    .snoop_inv_paddr_w_i(snoop_inv_paddr_w_i),
     .dtlb_lookup_valid_o(dtlb_lookup_valid_o),
     .dtlb_vaddr_w_o     (dtlb_vaddr_w_o),
     .dtlb_hit_i         (dtlb_hit_i),
@@ -527,7 +532,7 @@ module sukuna_stage_ex #(
 
   wire load_hazard_stall = hazard_s1 || hazard_s2;
   wire ma_struct_stall   = ((ma_en_l0_i && l0_valid_i) || (ma_en_l1_i && l1_valid_i)) && ma_busy;
-  wire sys_ma_stall      = l0_valid_i && l0_op_is_sys && (ma_busy || ma_out_valid);
+  wire sys_ma_stall      = l0_valid_i && l0_op_is_sys && (ma_busy || ma_out_valid || !l1d_sbuf_empty_i);
   wire non_eu_stall      = ma_miss_or_amo_stall || ma_struct_stall || sys_ma_stall || load_hazard_stall;
   wire other_ex_stall    = (is_fp_op && fp_busy) || non_eu_stall;
 
@@ -541,7 +546,7 @@ module sukuna_stage_ex #(
   // Pipeline Registers to WB Stage (Lane 0: INT/CSR/FP, Lane 1: 3-cycle MA)
   // --------------------------------------------------------------------------
   reg              int_was_l0_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg              sys_was_l0_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  (* max_fanout = 4 *) reg sys_was_l0_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              sys_valid_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [4:0]        sys_rd_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]   sys_rdata_q;     /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
@@ -555,7 +560,7 @@ module sukuna_stage_ex #(
   reg              sys_wfi_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              sys_sfence_q;    /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg              sys_fence_i_q;   /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
-  reg              is_fp_op_q;      /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  (* max_fanout = 4 *) reg is_fp_op_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]   int_pc_q;        /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
   reg [XLEN-1:0]   l0_tval_q;       /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 

@@ -104,25 +104,32 @@ module sukuna_l1_tlb #(
   wire        canonical_fault = lookup_valid_i && !is_bare && !canonical_ok;
 
   // --------------------------------------------------------------------------
-  // Parallel Matching (CAM) across 8 entries
+  // Parallel Matching (CAM) & Per-Entry Superpage PPN Formatting across 8 entries
   // --------------------------------------------------------------------------
-  wire [NUM_ENTRIES-1:0] match_vec;
+  wire [NUM_ENTRIES-1:0]  match_vec;
+  wire [PADDR_WIDTH-13:0] entry_paddr_hi [0:NUM_ENTRIES-1];
   genvar i;
   generate
     for (i = 0; i < NUM_ENTRIES; i = i + 1) begin : gen_cam
-      wire asid_match = (entry_asid_q[i] == 16'h0000) || (entry_asid_q[i] == satp_asid_i);
+      // ASID match: Global mapping ( we encode G=1 as entry_asid_q == 16'h0000 ) or exact ASID match
+      wire asid_match  = (entry_asid_q[i] == 16'h0000) || (entry_asid_q[i] == satp_asid_i);
       wire vpn4k_match = (entry_psize_q[i] == 2'b00) && (entry_vpn_q[i] == vaddr_full[38:12]);
       wire vpn2m_match = (entry_psize_q[i] == 2'b01) && (entry_vpn_q[i][26:9] == vaddr_full[38:21]);
       wire vpn1g_match = (entry_psize_q[i] == 2'b10) && (entry_vpn_q[i][26:18] == vaddr_full[38:30]);
-      
+
       assign match_vec[i] = entry_valid_q[i] && asid_match && (vpn4k_match || vpn2m_match || vpn1g_match);
+
+      assign entry_paddr_hi[i] =
+        (entry_psize_q[i] == 2'b01) ? {entry_ppn_q[i][PADDR_WIDTH-13:9],  vaddr_w_i[20:12]} :
+        (entry_psize_q[i] == 2'b10) ? {entry_ppn_q[i][PADDR_WIDTH-13:18], vaddr_w_i[29:12]} :
+                                      entry_ppn_q[i];
     end
   endgenerate
 
   wire tlb_hit = |match_vec;
 
   // Priority encode match vector to index
-  reg [2:0] hit_idx;
+  (* max_fanout = 16 *) reg [2:0] hit_idx;
   integer k;
   always @(*) begin
     hit_idx = 3'd0;
@@ -131,31 +138,26 @@ module sukuna_l1_tlb #(
     end
   end
 
-  // Mux selected entry attributes based on hit_idx
-  reg [PADDR_WIDTH-13:0] hit_entry_ppn;
-  reg [1:0]              hit_entry_psize;
-  reg                    hit_entry_fault;
-  always @(*) begin
-    hit_entry_ppn   = entry_ppn_q[hit_idx];
-    hit_entry_psize = entry_psize_q[hit_idx];
-    hit_entry_fault = entry_fault_q[hit_idx];
-  end
+  // Fast 2-LUT-level tree for paddr_w_o[31] (PMA cacheable bit, independent of hit_idx fanout)
+  (* dont_touch = "true" *) wire b31_p765 =
+    match_vec[7] ? entry_ppn_q[7][19] :
+    match_vec[6] ? entry_ppn_q[6][19] : (match_vec[5] && entry_ppn_q[5][19]);
+  (* dont_touch = "true" *) wire b31_p432 =
+    match_vec[4] ? entry_ppn_q[4][19] :
+    match_vec[3] ? entry_ppn_q[3][19] : (match_vec[2] && entry_ppn_q[2][19]);
+  (* dont_touch = "true" *) wire b31_p10 =
+    is_bare ? vaddr_w_i[31] : (match_vec[1] ? entry_ppn_q[1][19] : entry_ppn_q[0][19]);
+  (* dont_touch = "true" *) wire hit_765 = (!is_bare) && (|match_vec[7:5]);
+  (* dont_touch = "true" *) wire hit_432 = (!is_bare) && (|match_vec[4:2]);
+  (* dont_touch = "true" *) wire paddr_b31 =
+    hit_765 ? b31_p765 : hit_432 ? b31_p432 : b31_p10;
 
-  // Assemble translated physical address (word-aligned: bits [PADDR_WIDTH-1:2])
-  reg [PADDR_WIDTH-1:2] translated_paddr_w;
-  always @(*) begin
-    case (hit_entry_psize)
-      2'b01: begin // 2MB Superpage: PPN[PADDR-13:9] + vaddr[20:2]
-        translated_paddr_w = {hit_entry_ppn[PADDR_WIDTH-13:9], vaddr_w_i[20:2]};
-      end
-      2'b10: begin // 1GB Superpage: PPN[PADDR-13:18] + vaddr[29:2]
-        translated_paddr_w = {hit_entry_ppn[PADDR_WIDTH-13:18], vaddr_w_i[29:2]};
-      end
-      default: begin // 4KB Page: PPN[PADDR-13:0] + vaddr[11:2]
-        translated_paddr_w = {hit_entry_ppn, vaddr_w_i[11:2]};
-      end
-    endcase
-  end
+  // Mux selected entry translated PPN and fault based on hit_idx
+  wire [PADDR_WIDTH-13:0] hit_paddr_hi    = entry_paddr_hi[hit_idx];
+  wire                    hit_entry_fault = entry_fault_q[hit_idx];
+
+  // Assemble translated physical address (word-aligned: bits [11:2] are untranslated page offset!)
+  wire [PADDR_WIDTH-1:2] translated_paddr_w = {hit_paddr_hi, vaddr_w_i[11:2]};
 
   // --------------------------------------------------------------------------
   // Output Assignments
@@ -163,9 +165,9 @@ module sukuna_l1_tlb #(
   // Hit: in Bare mode, always hit; in Sv39 mode, CAM hit or immediate canonical fault
   assign hit_o = is_bare ? lookup_valid_i : (lookup_valid_i && (tlb_hit || canonical_fault));
 
-  // PADDR: Bare mode passes through VADDR directly; Sv39 translates unconditionally
-  // (Validity and canonical faults are carried by the 1-bit hit_o / page_fault_o strobes)
-  assign paddr_w_o = is_bare ? vaddr_w_i[PADDR_WIDTH-1:2] : translated_paddr_w;
+  // PADDR: Page offset [11:2] is always vaddr_w_i[11:2] (0 LUTs!); bit 31 uses dedicated fast tree
+  wire [PADDR_WIDTH-1:12] paddr_hi_mux = is_bare ? vaddr_w_i[PADDR_WIDTH-1:12] : translated_paddr_w[PADDR_WIDTH-1:12];
+  assign paddr_w_o = {paddr_hi_mux[PADDR_WIDTH-1:32], paddr_b31, paddr_hi_mux[30:12], vaddr_w_i[11:2]};
 
   // Page Fault: canonical address error or entry marked as fault
   assign page_fault_o = lookup_valid_i && !is_bare && (canonical_fault || (tlb_hit && hit_entry_fault));
@@ -194,12 +196,16 @@ module sukuna_l1_tlb #(
         refill_busy_q    <= 1'b0;
         refill_req_q     <= 1'b0;
       end else begin
+        // Capture vaddr whenever not busy (decouples 124-bit datapath CE from CAM lookup_valid_i/tlb_hit!)
+        if (!refill_busy_q) begin
+          pending_vaddr_w_q <= vaddr_w_i;
+          refill_vaddr_w_q  <= vaddr_w_i;
+        end
+
         // Track outstanding refill (Registered request)
         if (lookup_valid_i && !is_bare && !tlb_hit && !canonical_fault && !refill_busy_q) begin
           refill_req_q      <= 1'b1;
           refill_busy_q     <= 1'b1;
-          pending_vaddr_w_q <= vaddr_w_i;
-          refill_vaddr_w_q  <= vaddr_w_i;
         end else begin
           refill_req_q      <= 1'b0;
         end

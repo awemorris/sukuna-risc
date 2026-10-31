@@ -24,6 +24,7 @@ module sukuna_stage_if1 #(
 
   // Pipeline flow controls
   input  wire                   stall_i,
+  input  wire                   if2_stall_req_i,
   input  wire                   flush_i,
   input  wire [XLEN-1:0]        redirect_pc_i,
   input  wire                   wfi_sleep_i,
@@ -48,8 +49,9 @@ module sukuna_stage_if1 #(
   reg [XLEN-1:0] pc_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
 
   // Strictly 8-byte aligned fetch address (always even address: PC[2:0] == 3'b000)
+  // Decouple req_active from l1i_miss_i (u_l1i already blocks req_valid_q on miss and during miss_busy_q)
   wire [XLEN-1:0] curr_req_vaddr = flush_i ? {redirect_pc_i[XLEN-1:3], 3'b000} : pc_q;
-  wire            req_active     = rst_ni && (flush_i || !stall_i) && !wfi_sleep_i;
+  wire            req_active     = rst_ni && (flush_i || !if2_stall_req_i) && !wfi_sleep_i;
 
   // ITLB translation request
   assign itlb_req_valid_o = req_active;

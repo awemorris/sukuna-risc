@@ -209,7 +209,7 @@ module sukuna_stage_id1 #(
 
   // System & Privileged Opcode Decoding
   wire [11:0] funct12_0 = if2_inst0_i[31:20];
-  wire [2:0] sys_op0 = (is_fence0 && funct3_0 == 3'b001) ? `SYS_PRIV :
+  wire [2:0] sys_op0 = is_fence0 ? `SYS_PRIV :
                        (!is_sys0) ? `SYS_NONE :
                        (funct3_0 == 3'b000)    ? `SYS_PRIV :
                        (funct3_0[1:0] == 2'b01) ? `SYS_CSRRW :
@@ -328,7 +328,7 @@ module sukuna_stage_id1 #(
   // Dual-Issue Pairing & Hazard Evaluation
   // --------------------------------------------------------------------------
   wire [1:0] type0_comb = (is_load0 || is_store0 || is_amo0) ? 2'b10 :
-                          (is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || (is_fence0 && funct3_0 == 3'b001)) ? 2'b00 :
+                          (is_sys0 || is_branch0 || (jump_type0 != `JUMP_NONE) || is_fence0) ? 2'b00 :
                           2'b01;
 
   wire raw_hazard = l0_writes_rd && (if2_inst0_i[11:7] != 5'd0) &&

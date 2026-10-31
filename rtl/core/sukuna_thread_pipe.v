@@ -80,6 +80,9 @@ module sukuna_thread_pipe #(
   input  wire                       l1d_resp_valid_i,
   input  wire [XLEN-1:0]            l1d_rdata_i,
   input  wire                       l1d_miss_stall_i,
+  input  wire                       l1d_sbuf_empty_i,
+  input  wire                       snoop_inv_valid_i,
+  input  wire [PADDR_WIDTH-1:2]     snoop_inv_paddr_w_i,
 
   // --------------------------------------------------------------------------
   // Dedicated Uncached / MMIO Port
@@ -297,15 +300,8 @@ module sukuna_thread_pipe #(
       redirect_valid_q <= 1'b0;
       redirect_pc_q    <= {XLEN{1'b0}};
     end else begin
-      if (trap_flush) begin
-        redirect_valid_q <= 1'b1;
-        redirect_pc_q    <= trap_target_pc;
-      end else if (branch_mispredict) begin
-        redirect_valid_q <= 1'b1;
-        redirect_pc_q    <= branch_target;
-      end else begin
-        redirect_valid_q <= 1'b0;
-      end
+      redirect_valid_q <= trap_flush || branch_mispredict;
+      redirect_pc_q    <= trap_flush ? trap_target_pc : branch_target;
     end
   end
 
@@ -329,6 +325,7 @@ module sukuna_thread_pipe #(
     .clk_i            (clk_i),
     .rst_ni           (rst_ni),
     .stall_i          (stall_if1),
+    .if2_stall_req_i  (if2_stall_req),
     .flush_i          (sync_flush_if1),
     .redirect_pc_i    (if1_redirect_pc),
     .wfi_sleep_i      (wfi_sleep),
@@ -753,6 +750,9 @@ module sukuna_thread_pipe #(
     .l1d_resp_valid_i   (l1d_resp_valid_i),
     .l1d_rdata_i        (l1d_rdata_i),
     .l1d_miss_stall_i   (l1d_miss_stall_i),
+    .l1d_sbuf_empty_i   (l1d_sbuf_empty_i),
+    .snoop_inv_valid_i  (snoop_inv_valid_i),
+    .snoop_inv_paddr_w_i(snoop_inv_paddr_w_i),
     .uncached_req_valid_o  (uncached_req_valid_o),
     .uncached_req_write_o  (uncached_req_write_o),
     .uncached_req_op_o     (uncached_req_op_o),

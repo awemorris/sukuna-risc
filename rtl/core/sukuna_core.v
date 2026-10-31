@@ -37,6 +37,9 @@ module sukuna_core #(
   input  wire                               l2_resp_valid_i,
   input  wire [3:0]                         l2_resp_source_i,
   input  wire [CACHE_LINE_BITS-1:0]         l2_resp_rdata_i,
+  input  wire                               l2_back_inv_valid_i,
+  input  wire [PADDR_WIDTH-1:2]             l2_back_inv_paddr_w_i,
+  input  wire                               l2_write_pending_i,
 
   // Dedicated Uncached / MMIO Port
   output wire [NUM_HARTS-1:0]               uncached_req_valid_o,
@@ -89,6 +92,9 @@ module sukuna_core #(
   wire [NUM_HARTS-1:0]                 l1d_resp_valid;
   wire [NUM_HARTS*XLEN-1:0]            l1d_rdata;
   wire [NUM_HARTS-1:0]                 l1d_miss_stall;
+  wire [NUM_HARTS-1:0]                 l1d_sbuf_empty;
+  wire [NUM_HARTS-1:0]                 snoop_inv_valid;
+  wire [NUM_HARTS*(PADDR_WIDTH-2)-1:0] snoop_inv_paddr_w;
 
   // Shared EX lines
   wire [NUM_HARTS-1:0]             shared_req_valid;
@@ -110,6 +116,19 @@ module sukuna_core #(
   wire                             ptw_mem_req_ready;
   wire                             ptw_mem_resp_valid;
   wire [XLEN-1:0]                  ptw_mem_resp_data;
+
+  // Registered per-Hart store-pipeline drain status (L1D sbuf + L2 arbiter + L2 cache)
+  reg [NUM_HARTS-1:0] l1d_sbuf_all_empty_q; /* synthesis syn_ramstyle = "registers", syn_srlstyle = "registers" */
+  integer sh;
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      l1d_sbuf_all_empty_q <= {NUM_HARTS{1'b1}};
+    end else begin
+      for (sh = 0; sh < NUM_HARTS; sh = sh + 1) begin
+        l1d_sbuf_all_empty_q[sh] <= l1d_sbuf_empty[sh] && !l2_write_pending_i;
+      end
+    end
+  end
 
   // Instantiating 3 Thread Pipelines (SMT)
   genvar h;
@@ -164,6 +183,9 @@ module sukuna_core #(
         .l1d_resp_valid_i   (l1d_resp_valid[h]),
         .l1d_rdata_i        (l1d_rdata[h*XLEN +: XLEN]),
         .l1d_miss_stall_i   (l1d_miss_stall[h]),
+        .l1d_sbuf_empty_i   (l1d_sbuf_all_empty_q[h]),
+        .snoop_inv_valid_i  (snoop_inv_valid[h]),
+        .snoop_inv_paddr_w_i(snoop_inv_paddr_w[h*(PADDR_WIDTH-2) +: (PADDR_WIDTH-2)]),
 
         .uncached_req_valid_o  (uncached_req_valid_o[h]),
         .uncached_req_write_o  (uncached_req_write_o[h]),
@@ -266,6 +288,9 @@ module sukuna_core #(
     .mem_resp_valid_o   (l1d_resp_valid),
     .mem_rdata_o        (l1d_rdata),
     .mem_miss_stall_o   (l1d_miss_stall),
+    .l1d_sbuf_empty_o   (l1d_sbuf_empty),
+    .snoop_inv_valid_o  (snoop_inv_valid),
+    .snoop_inv_paddr_w_o(snoop_inv_paddr_w),
     .ptw_req_valid_i    (ptw_mem_req_valid),
     .ptw_paddr_w_i      (ptw_mem_req_paddr_w),
     .ptw_req_ready_o    (ptw_mem_req_ready),
@@ -280,6 +305,8 @@ module sukuna_core #(
     .l2_resp_valid_i    (l2_resp_valid_i),
     .l2_resp_source_i   (l2_resp_source_i),
     .l2_resp_rdata_i    (l2_resp_rdata_i),
+    .l2_back_inv_valid_i  (l2_back_inv_valid_i),
+    .l2_back_inv_paddr_w_i(l2_back_inv_paddr_w_i),
     .fence_i_flush_i    (fence_i_flush)
   );
 

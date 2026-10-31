@@ -483,8 +483,12 @@ module sukuna_fp_unit #(
   endfunction
 
   wire [31:0] i2f_s2_abs_hi = i2f_s1_hi_xor_q + {31'd0, i2f_s1_carry_lo_q};
-  wire        i2f_s2_hi_nz  = !i2f_s1_word_q && (i2f_s2_abs_hi != 32'd0);
-  wire [31:0] i2f_s2_val32  = i2f_s2_hi_nz ? i2f_s2_abs_hi : i2f_s1_abs_lo_q;
+  wire        i2f_s2_hi_nz  = !i2f_s1_word_q &&
+                              (i2f_s1_carry_lo_q ? (i2f_s1_hi_xor_q != 32'hFFFFFFFF) :
+                                                   (i2f_s1_hi_xor_q != 32'd0));
+  wire [4:0]  i2f_s2_clz_hi = clz32(i2f_s2_abs_hi);
+  wire [4:0]  i2f_s2_clz_lo = clz32(i2f_s1_abs_lo_q);
+  wire [4:0]  i2f_s2_clz    = i2f_s2_hi_nz ? i2f_s2_clz_hi : i2f_s2_clz_lo;
   wire [63:0] i2f_s2_val64  = i2f_s2_hi_nz ? {i2f_s2_abs_hi, i2f_s1_abs_lo_q} : {i2f_s1_abs_lo_q, 32'd0};
 
   always @(posedge clk_i or negedge rst_ni) begin
@@ -507,9 +511,10 @@ module sukuna_fp_unit #(
         i2f_s1_zero_q     <= is_word_int ? (gpr_src1_i[31:0] == 32'd0) :
                              ((gpr_src1_i[63:32] == 32'd0) && (gpr_src1_i[31:0] == 32'd0));
         i2f_s1_word_q     <= is_word_int;
-      end else if (state_q == S_BUSY && step_q == 3'd1 && op5_q == 5'b11010) begin
+      end
+      if (state_q == S_BUSY && step_q == 3'd1 && op5_q == 5'b11010) begin
         i2f_s2_val64_q <= i2f_s2_val64;
-        i2f_s2_clz_q   <= clz32(i2f_s2_val32);
+        i2f_s2_clz_q   <= i2f_s2_clz;
         i2f_s2_hi_nz_q <= i2f_s2_hi_nz;
       end
     end
