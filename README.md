@@ -10,7 +10,7 @@ Overall Architecture:
 - Pipeline: In-order, Asymmetric Dual-issue, 3-SMT, 1-core/3-thread, 7-9 staged pipeline (IF1-IF2-ID1-ID2-ID3-EX-WB),
 - Cache: L1I 48KB (16KB/thread), L1D 48KB (16KB/thread), shared L2 256KB
 - Clock: 1.7GHz on 5nm ASIC, 450MHz on 16nm FPGA, 250MHz on 28nm FPGA
-- Size: 30,000 LUTs for FPGAs
+- Size: 105.9k/65.0k LUT/FFs on KC705
 
 Threading Strategy:
 - 1-thread for kernel: handles interrupts and devices
